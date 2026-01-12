@@ -1,0 +1,15 @@
+services:
+  bcfl-simulation:
+    build: .
+    container_name: bcfl_core_system
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app # Mount code để sửa đổi không cần build lại
+    environment:
+      - FLASK_ENV=development
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G

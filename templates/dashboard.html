@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="vi">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>BCFL Simulation Dashboard</title>
+		<link
+			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+			rel="stylesheet"
+		/>
+		<style>
+			body {
+				padding: 20px;
+				background-color: #f8f9fa;
+			}
+			.card {
+				box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+			}
+			.status-badge {
+				font-weight: bold;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<div class="text-center mb-4">
+				<h1 class="display-6">BCFL CoCo Cluster Dashboard</h1>
+				<p class="text-muted">
+					Theo dõi tiến trình huấn luyện theo thời gian thực
+				</p>
+			</div>
+
+			<div class="row mb-4 text-center">
+				<div class="col-md-4">
+					<div class="card p-3 border-primary">
+						<h5>Vòng hiện tại</h5>
+						<h2 id="currentRound" class="text-primary">0</h2>
+					</div>
+				</div>
+				<div class="col-md-4">
+					<div class="card p-3 border-success">
+						<h5>Độ chính xác (Accuracy)</h5>
+						<h2 id="currentAcc" class="text-success">0%</h2>
+					</div>
+				</div>
+				<div class="col-md-4">
+					<div class="card p-3 border-danger">
+						<h5>Độ mất mát (Loss)</h5>
+						<h2 id="currentLoss" class="text-danger">0</h2>
+					</div>
+				</div>
+			</div>
+
+			<div class="card">
+				<div
+					class="card-header bg-dark text-white d-flex justify-content-between align-items-center"
+				>
+					<span>Lịch sử Huấn luyện</span>
+					<span class="badge bg-warning text-dark" id="statusBadge"
+						>Waiting...</span
+					>
+				</div>
+				<div class="card-body p-0">
+					<div
+						class="table-responsive"
+						style="max-height: 500px; overflow-y: auto"
+					>
+						<table class="table table-striped table-hover mb-0 text-center">
+							<thead class="table-dark sticky-top">
+								<tr>
+									<th>Round</th>
+									<th>Accuracy (%)</th>
+									<th>Loss</th>
+									<th>Block Height</th>
+								</tr>
+							</thead>
+							<tbody id="metricsBody"></tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			async function updateDashboard() {
+				try {
+					// 1. Gọi API lấy dữ liệu
+					const response = await fetch("/get_metrics");
+					const data = await response.json();
+
+					// Kiểm tra nếu chưa có dữ liệu
+					if (!data.rounds || data.rounds.length === 0) {
+						document.getElementById("statusBadge").innerText = "No Data";
+						return;
+					}
+
+					// 2. Cập nhật Thống kê nhanh (Lấy phần tử cuối cùng)
+					const lastIdx = data.rounds.length - 1;
+					document.getElementById("currentRound").innerText =
+						data.rounds[lastIdx];
+					document.getElementById("currentAcc").innerText =
+						data.accuracy[lastIdx] + "%";
+					document.getElementById("currentLoss").innerText = data.loss[lastIdx];
+					document.getElementById("statusBadge").innerText = "Live Updating";
+
+					// 3. Cập nhật Bảng (Xóa cũ điền mới hoặc chèn thêm)
+					// Ở đây ta xóa đi render lại cho đơn giản
+					const tbody = document.getElementById("metricsBody");
+					tbody.innerHTML = "";
+
+					// Duyệt ngược để vòng mới nhất hiện lên trên đầu
+					for (let i = lastIdx; i >= 0; i--) {
+						const row = `
+                    <tr>
+                        <td><strong>${data.rounds[i]}</strong></td>
+                        <td><span class="badge bg-success">${data.accuracy[i]}%</span></td>
+                        <td>${data.loss[i]}</td>
+                        <td>#${data.blockchain_height[i]}</td>
+                    </tr>
+                `;
+						tbody.innerHTML += row;
+					}
+				} catch (error) {
+					console.error("Lỗi kết nối:", error);
+					document.getElementById("statusBadge").innerText = "Connection Error";
+					document.getElementById("statusBadge").className = "badge bg-danger";
+				}
+			}
+
+			// Gọi hàm cập nhật mỗi 2 giây (2000ms)
+			setInterval(updateDashboard, 2000);
+
+			// Gọi ngay lần đầu khi tải trang
+			updateDashboard();
+		</script>
+	</body>
+</html>

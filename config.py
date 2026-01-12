@@ -1,0 +1,57 @@
+# Cấu hình tham số (Learning rate, Epsilons, Batch size, etc)
+import torch
+import os
+
+class Config:
+    # --- 1. Cấu hình Hệ thống & Docker ---
+    HOST = '0.0.0.0'
+    PORT = 5000
+    DEBUG = True
+    
+    # Tự động chọn GPU nếu có
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Đường dẫn lưu Model/Log (Tạo thư mục nếu chưa có)
+    SAVE_DIR = "./results"
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
+    # --- 2. Cấu hình Mạng BCFL (Network) ---
+    NUM_WORKERS = 5          # Số lượng Worker giả lập
+    NUM_CLUSTERS = 2         # Số lượng cụm (Cluster) - K
+    NUM_ROUNDS = 50          # Tổng số vòng Global Rounds chạy thử nghiệm
+
+    # --- 3. Cấu hình Huấn luyện (Training Hyperparameters) ---
+    DATASET_NAME = 'CIFAR10' # Hoặc 'MNIST'
+    LOCAL_EPOCHS = 1         # Số epoch train tại mỗi worker mỗi vòng
+    BATCH_SIZE = 32
+    LEARNING_RATE = 0.01
+    MOMENTUM = 0.9
+
+    # --- 4. Cấu hình Bảo mật (Privacy & Security) ---
+    # Local Differential Privacy (LDP)
+    ENABLE_LDP = True        # Bật/Tắt LDP
+    LDP_EPSILON = 0.5        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
+    
+    # Secure Aggregation / Encryption
+    ENABLE_ENCRYPTION = False # (Giai đoạn sau)
+
+    # --- 5. Cấu hình Blockchain & Đồng thuận ---
+    COMMITTEE_SIZE = 3       # Số lượng thành viên trong ủy ban
+    CONSENSUS_THRESHOLD = 0.66 # Tỷ lệ phiếu bầu cần thiết (2/3)
+    MIN_REPUTATION = 50.0    # Điểm uy tín tối thiểu để được làm Block Leader
+    
+    # --- 6. Cấu hình Cơ chế BALANCE (Lọc độc hại) ---
+    BALANCE_THRESHOLD = 10.0 # Ngưỡng sai biệt tối đa để coi là node lành tính
+
+    # --- 7. Cấu hình Smart Contract & Reputation (Có thể sửa lại cấu hình cho đúng) ---
+    INITIAL_REPUTATION = 50.0  # Điểm khởi đầu
+    MIN_REQ_REPUTATION = 20.0  # Điểm tối thiểu để được tham gia mạng (nếu thấp hơn sẽ bị ban)
+    
+    # Cơ chế thưởng phạt
+    REWARD_SUCCESSFUL_BLOCK = 5.0    # Thưởng cho CH nếu Block được duyệt
+    REWARD_COMMITTEE_VOTE = 1.0      # Thưởng cho thành viên Ủy ban vì đã bỏ phiếu
+    PENALTY_REJECTED_BLOCK = -10.0   # Phạt nặng CH nếu gửi model rác
+    PENALTY_MALICIOUS = -20.0        # Phạt nếu phát hiện tấn công
+    
+    ACCURACY_BONUS_FACTOR = 0.5      # Hệ số nhân thưởng theo độ chính xác (VD: Acc 30% -> Bonus 15 điểm)
+    DECAY_FACTOR = 0.99              # Hệ số giảm dần theo thời gian (để khuyến khích đóng góp liên tục)

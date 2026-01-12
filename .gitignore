@@ -1,0 +1,31 @@
+# --- 1. Python & Môi trường ảo (Bắt buộc) ---
+__pycache__/
+*.pyc
+venv/
+env/
+.env
+.venv
+
+# --- 2. Dữ liệu & Model (Rất nặng, không nên push lên Git) ---
+# Tránh push file model nặng (file .pth thường vài chục đến vài trăm MB)
+*.pth
+*.pt
+*.ckpt
+
+# Tránh push bộ dữ liệu (CIFAR-10, MNIST...)
+data/
+dataset/
+
+# --- 3. Logs & Kết quả chạy thử nghiệm ---
+logs/
+results/
+ket_qua_thu_nghiem.csv
+runs/
+
+# --- 4. Cấu hình hệ thống & IDE ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- 5. Docker (Nếu có file tạm của Docker) ---
+docker-compose.override.yml
