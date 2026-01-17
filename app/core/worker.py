@@ -5,14 +5,48 @@ import math
 from app.models.cnn import SimpleCNN
 from config import Config
 from app.core.ldp_helpers import LDP
+from app.core.attacks import AttackFactory
+from app.utils.data_loader import get_dataloader
+from app.models.cnn import get_model
 # Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
-    def __init__(self, node_id, data_loader):
+    def __init__(self, node_id, dataset_name='cifar10'):
         self.id = node_id
-        self.data_loader = data_loader
+        # self.data_loader = data_loader
+        self.dataset_name = dataset_name
         self.device = Config.DEVICE
         self.model = SimpleCNN().to(self.device)
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
+        self.attack_type = "NONE"
+        self.attack_strategy = AttackFactory.get_strategy("NONE")
+
+        # Khởi tạo Optimizer & Loss
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.SGD(
+            self.model.parameters(), 
+            lr=Config.LEARNING_RATE, 
+            momentum=Config.MOMENTUM
+        )
+        # Các tham số sử dụng cho giải thuật DFCA
+        self.cluster_models_cache = {}
+        self.update_counts = {} # số lượng cập nhật đã nhận cho mỗi cụm
+
+    def reload_dataset(self, dataset_name):
+        self.dataset_name = dataset_name
+
+        self.data_loader, self.num_classes, _ = get_dataloader(
+            dataset_name, self.id, Config.NUM_WORKERS
+        )
+        # Khởi tạo Model mới (khớp với num_classes)
+        self.model = get_model(Config.MODEL_NAME, num_classes=self.num_classes).to(self.device)
+        
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=Config.LEARNING_RATE)
+
+        print(f"[Worker {self.id}] Reloaded: {dataset_name} (Classes: {self.num_classes})")
+
+    def set_attack_profile(self, attack_type):
+        self.attack_type = AttackFactory.get_strategy(attack_type)
 
     def evaluate_loss_on_model(self, model_state):
         """Bước 1: Tính Loss để chọn cụm (DFCA)"""
@@ -26,12 +60,13 @@ class WorkerNode:
         self.cluster_id = min(losses, key=losses.get)
         print(f"Worker {self.id} joined Cluster {self.cluster_id}")
 
-    def train(self, epochs=1):
+    def train(self):
         """Bước 2: Huấn luyện cục bộ (Local Training)"""
-        self.model.train()
-        # ... logic training loop (SGD) ...
-        print(f"Worker {self.id} finished training.")
-        return self.model.state_dict()
+        # self.model.train()
+        # # ... logic training loop (SGD) ...
+        # print(f"Worker {self.id} finished training.")
+        # return self.model.state_dict()
+        return self.attack_strategy.execute(self)
 
     def apply_ldp(self, params):
         """
@@ -83,3 +118,61 @@ class WorkerNode:
         #     print(f"Worker {self.id}: Model clipped! Norm={total_norm:.2f} > C={clip_threshold}")
 
         return noisy_params
+    
+    def apply_dfca_gossip_update(self, neighbor_cluster_id, neighbor_params):
+        """
+        Thực hiện cập nhật Sequential Running Average theo công thức DFCA (26).
+        
+        :param neighbor_cluster_id: ID cụm của mô hình hàng xóm gửi tới (c*)
+        :param neighbor_params: Tham số mô hình của hàng xóm (w_{j,c*})
+        """
+        
+        # Trường hợp 1: Nếu đây là lần đầu tiên Worker thấy mô hình của cụm này
+        # Thì khởi tạo bằng chính mô hình hàng xóm (tương đương r=0)
+        if neighbor_cluster_id not in self.cluster_models_cache:
+            # Deep copy để tránh tham chiếu vùng nhớ
+            self.cluster_models_cache[neighbor_cluster_id] = {
+                k: v.clone().to(self.device) for k, v in neighbor_params.items()
+            }
+            self.update_counts[neighbor_cluster_id] = 1
+            print(f"[Worker {self.id}] Initialized cache for Cluster {neighbor_cluster_id}")
+            return
+
+        # Trường hợp 2: Đã có bản sao, thực hiện công thức trung bình
+        r = self.update_counts[neighbor_cluster_id]
+        
+        # Lấy w_{i,c*} (Mô hình cục bộ hiện tại cho cụm đó)
+        local_cache_params = self.cluster_models_cache[neighbor_cluster_id]
+        
+        # Tính hệ số Alpha và Beta
+        # alpha = r / (r + 1)
+        # beta  = 1 / (r + 1)
+        alpha = r / (r + 1.0)
+        beta = 1.0 / (r + 1.0)
+        
+        updated_params = {}
+        
+        # Thực hiện cộng gộp từng lớp (Layer-wise aggregation)
+        for name in local_cache_params.keys():
+            if name in neighbor_params:
+                # w_new = alpha * w_old + beta * w_neighbor
+                # Đảm bảo tensor nằm trên cùng device (CPU/GPU)
+                w_old = local_cache_params[name]
+                w_neighbor = neighbor_params[name].to(self.device)
+                
+                updated_params[name] = (alpha * w_old) + (beta * w_neighbor)
+            else:
+                # Nếu layer không khớp (hiếm gặp), giữ nguyên cũ
+                updated_params[name] = local_cache_params[name]
+
+        # Cập nhật lại bộ nhớ đệm
+        self.cluster_models_cache[neighbor_cluster_id] = updated_params
+        
+        # Tăng biến đếm r
+        self.update_counts[neighbor_cluster_id] += 1
+        
+        # (Tùy chọn) Nếu cụm này trùng với cụm hiện tại của Worker, 
+        # cập nhật luôn vào model chính để train tiếp
+        if neighbor_cluster_id == self.cluster_id:
+            self.model.load_state_dict(updated_params)
+            print(f"[Worker {self.id}] Updated MAIN model via Gossip from Cluster {neighbor_cluster_id} (r={r+1})")

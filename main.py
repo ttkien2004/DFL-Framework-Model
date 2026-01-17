@@ -23,6 +23,9 @@ history = {
     "blockchain_height": []
 }
 
+# Biến toàn cục theo dõi dataset
+current_system_dataset = Config.DATASET_NAME
+
 @app.route('/')
 def home():
     # return "BCFL CoCo Cluster Simulation API is Running!"
@@ -44,8 +47,38 @@ def run_simulation_round():
     LOGIC CHÍNH: Chạy một vòng huấn luyện (Round)
     Bao gồm 5 Pha: Clustering -> CoCo -> Training/LDP -> Aggregation/BALANCE -> Consensus
     """
+    global current_system_dataset
+
     start_time = time.time()
     current_round = len(blockchain.chain)
+
+    # Đọc cấu hình từ request
+    req_data = request.get_json(silent=True) or {}
+
+    attack_type = req_data.get('data_type', 'NONE')
+    malicious_percent = req_data.get('malicious_percent', 0.0)
+
+    num_malicious = int(len(workers) * malicious_percent)
+    malicious_indices = random.sample(range(len(workers)), num_malicious)
+
+    print(f"SCENARIO: {attack_type} on {num_malicious} workers ({malicious_indices})")
+
+    requested_dataset = req_data.get('dataset', current_system_dataset).lower()
+    # Kiểm tra chuyển đổi datasset
+    if requested_dataset != current_system_dataset:
+        print(f"Switching {current_system_dataset} to {requested_dataset}")
+        for w in workers:
+            w.reload_dataset(requested_dataset)
+        for ch in cluster_heads:
+            ch.reload_model(requested_dataset)
+
+        current_system_dataset = requested_dataset
+
+    for w in workers:
+        if w.id in malicious_indices:
+            w.set_attack_profile(attack_type)
+        else:
+            w.set_attack_profile("NONE")
     print(f"\n---STARTING ROUND {current_round} ---")
 
     # PHA 1: CLUSTERING (DFCA - Dynamic Federated Clustering)
@@ -63,8 +96,25 @@ def run_simulation_round():
         target_ch = cluster_heads[w.cluster_id]
         target_ch.register_member(w.id)
 
+    # TRAINING & LDP (Local Differential Privacy)
+    print("[Phase 2] Local Training & LDP...")
+    worker_updates_cache = {}
+    
+    for w in workers:
+        # if w.id in instruction_maps:
+        #     instr = instruction_maps[w.id]
+        #     trained_params = w.train() 
+        #     noisy_params = w.apply_ldp(trained_params)
+        #     target_ch = cluster_heads[w.cluster_id]
+        #     target_ch.receive_update(w.id, noisy_params)
+        trained_params = w.train()
+
+        # Áp dụng LDP
+        noisy_params = w.apply_ldp(trained_params)
+        worker_updates_cache[w.id] = noisy_params
+
     # PHA 2: CoCo OPTIMIZATION (Topology & Compression)
-    print("[Phase 2] CoCo Optimization...")
+    print("[Phase 3] CoCo Optimization...")
     
     all_topologies = {} 
     instruction_maps = {} 
@@ -76,28 +126,49 @@ def run_simulation_round():
             'cpu_load': random.uniform(10, 80)
         }
         target_ch = cluster_heads[w.cluster_id]
-        target_ch.receive_metrics(w.id, metrics, w.model.state_dict())
+
+        cur_model = worker_updates_cache[w.id]
+        target_ch.receive_metrics(w.id, metrics, cur_model)
 
     # B2: CH chạy thuật toán tối ưu
     for ch in cluster_heads:
         instructions, topology_viz = ch.run_coco_optimization()
         instruction_maps.update(instructions)
         all_topologies[ch.cluster_id] = topology_viz
-
-    # PHA 3: TRAINING & LDP (Local Differential Privacy)
-    print("[Phase 3] Local Training & LDP...")
     
-    for w in workers:
-        if w.id in instruction_maps:
-            instr = instruction_maps[w.id]
-            trained_params = w.train() 
-            noisy_params = w.apply_ldp(trained_params)
-            target_ch = cluster_heads[w.cluster_id]
-            target_ch.receive_update(w.id, noisy_params)
 
     # PHA 4: AGGREGATION & BALANCE FILTERING
-    print("[Phase 4] Aggregation & BALANCE Filtering...")
+    print("[Phase 4] Aggregation...")
+    final_updates_for_ch = {}
+    # Thực thi giải thuật tổng hợp mô hình cục bộ của DFCA
+    worker_lookup = {w.id: w for w in workers}
+    for w_id, instr in instruction_maps.items():
+        receiver = worker_lookup.get(w_id)
+        if not receiver: continue
+
+        cr = instr.get('compression_ratio', 1.0) # Mô phỏng nén
+        assigned_neighbors = instr.get('neighbors', [])
+
+        for neighbor_id in assigned_neighbors:
+            sender = worker_lookup.get(neighbor_id)
+            if sender:
+                sender_cluster = sender.cluster_id
+                sender_params = worker_updates_cache[neighbor_id]
+
+                receiver.apply_dfca_gossip_update(sender_cluster, sender_params)
+                print(f"{w_id} pulled model from neighbor {neighbor_id}")
+
+        final_model_state = {k: v.cpu().clone() for k, v in receiver.model.state_dict().items()}
+        final_updates_for_ch[w_id] = final_model_state
     
+    # Gửi toàn bộ model đã xử lý về cho Cluster Head
+    for w_id, model_state in final_updates_for_ch.items():
+        worker = worker_lookup[w_id]
+        target_ch = cluster_heads[worker.cluster_id]
+        
+        # CH nhận model cuối cùng để chạy FedAvg
+        target_ch.receive_update(w_id, model_state)
+        
     round_results = []
     
     # Danh sách tạm để tính trung bình toàn mạng cho Dashboard
@@ -137,9 +208,7 @@ def run_simulation_round():
         status = "Accepted" if success else "Rejected"
         consensus_log.append(f"Cluster {res['cluster_id']}: {status} (Acc: {res['accuracy']:.2f}%)")
 
-    # ==============================================================================
     # TỔNG HỢP METRICS & LƯU HISTORY (PHỤC VỤ DASHBOARD)
-    # ==============================================================================
     
     # 1. Tính trung bình toàn mạng
     avg_accuracy = sum(cluster_accuracies) / len(cluster_accuracies) if cluster_accuracies else 0

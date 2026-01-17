@@ -5,14 +5,14 @@ from config import Config
 
 class Balance:
     @staticmethod
-    def flatten_model(self, state_dict):
+    def flatten_model(state_dict):
         """Chuyển toàn bộ model thành 1 vector duy nhất để tính Norm"""
         # Chỉ lấy các tensor kiểu float/int, bỏ qua các buffer không cần thiết
         tensors = [p.view(-1) for p in state_dict.values()]
         return torch.cat(tensors).to(Config.DEVICE)
     
     @staticmethod
-    def calculate_adaptive_threshold(self, global_norm, distances, round_k):
+    def calculate_adaptive_threshold(global_norm, distances, round_k):
         """
         Tính ngưỡng động dựa trên công thức BALANCE
         """
@@ -41,5 +41,5 @@ class Balance:
         # 3. Ngưỡng cuối cùng
         threshold = baseline * spatial_scale
         
-        print(f"[BALANCE-CH{self.cluster_id}] Round {round_k}: Baseline={baseline:.4f}, Scale={spatial_scale:.2f}, Threshold={threshold:.4f}")
+        # print(f"[BALANCE-CH{self.cluster_id}] Round {round_k}: Baseline={baseline:.4f}, Scale={spatial_scale:.2f}, Threshold={threshold:.4f}")
         return threshold

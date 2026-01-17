@@ -7,11 +7,12 @@ from app.core.coco_helpers import CoCo
 from app.core.balance_helpers import Balance
 # Class này xử lý CoCom lọc BALANCE và tổng hợp
 class ClusterHead:
-    def __init__(self, cluster_id):
+    def __init__(self, cluster_id, dataset_name='cifar10'):
         self.cluster_id = cluster_id
         self.global_model = SimpleCNN().to(Config.DEVICE)
         self.members = []
 
+        self.reload_model(dataset_name)
         # Khởi tạo model dựa trên Config
         try:
             self.global_model = get_model(Config.MODEL_NAME).to(Config.DEVICE)
@@ -29,6 +30,14 @@ class ClusterHead:
 
         self.pending_models = [] # Bộ nhớ tạm để chứa model worker gửi lên
 
+    def reload_model(self, dataset_name):
+        if dataset_name == 'gtsrb': num_classes = 43
+        else: num_classes = 10
+
+        self.global_model = get_model(Config.MODEL_NAME, num_classes=num_classes)
+        self.pending_models = []
+        print(f"[CH {self.cluster_id}] Reset global model for {dataset_name}")
+    
     def register_member(self, worker_id):
         """Đăng ký worker vào cụm"""
         if worker_id not in self.members:
@@ -139,12 +148,33 @@ class ClusterHead:
 
 
     def receive_update(self, worker_id, noisy_params):
-        """Nhận cập nhật từ worker"""
-        self.members.append(noisy_params)
+        """
+        Nhận mô hình (đã train & LDP) từ Worker gửi lên.
+        Hàm này chỉ nhận và lưu, chưa xử lý logic (Logic xử lý nằm ở aggregate).
+        """
+        if noisy_params is None:
+            print(f"[CH {self.cluster_id}] Worker {worker_id} sent None update.")
+            return
+
+        # Worker khi gửi lên thường để ở CPU để tiết kiệm bộ nhớ GPU khi truyền
+        try:
+            formatted_params = {
+                k: v.to(Config.DEVICE) for k, v in noisy_params.items()
+            }
+            
+            # Lưu vào danh sách chờ
+            # (Bạn có thể lưu thêm worker_id nếu muốn log chi tiết ai bị loại ở bước BALANCE)
+            self.pending_models.append(formatted_params)
+            
+            # Log (có thể comment lại nếu spam terminal quá nhiều)
+            # print(f"[CH {self.cluster_id}] Received update from Worker {worker_id}")
+            
+        except Exception as e:
+            print(f"[CH {self.cluster_id}] Error receiving update from {worker_id}: {e}")
 
     def balance_filtering(self, round_k):
         """
-        Bước 4: Lọc mô hình độc hại sử dụng BALANCE Adaptive Threshold
+        Lọc mô hình độc hại sử dụng BALANCE Adaptive Threshold
         """
         if not self.pending_models:
             return []
@@ -201,5 +231,7 @@ class ClusterHead:
         
         # Tính Hash
         model_hash = compute_model_hash(avg_state)
+
+        self.pending_models = []
         
         return self.global_model.state_dict(), model_hash

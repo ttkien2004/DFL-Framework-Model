@@ -22,6 +22,7 @@ class Config:
 
     # --- 3. Cấu hình Huấn luyện (Training Hyperparameters) ---
     DATASET_NAME = 'CIFAR10' # Hoặc 'MNIST'
+    MODEL_NAME = 'simple_cnn'
     LOCAL_EPOCHS = 1         # Số epoch train tại mỗi worker mỗi vòng
     BATCH_SIZE = 32
     LEARNING_RATE = 0.01
