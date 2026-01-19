@@ -1,4 +1,6 @@
 # File chạy chính
+from platform import node
+from platform import node
 from flask import Flask, jsonify, request, render_template
 from app.core.worker import WorkerNode
 from app.core.cluster_head import ClusterHead
@@ -7,12 +9,42 @@ import random # Thêm tạm thời để tính loss
 from config import Config
 from app.utils.helpers import model_to_json
 
+from app.blockchain.node_manager import NodeManager
+
+
 app = Flask(__name__)
 
 # Khởi tạo hệ thống giả lập
-workers = [WorkerNode(i, None) for i in range(Config.NUM_WORKERS)]
-cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
-blockchain = Blockchain()
+# worker_pools = [WorkerNode(i, None) for i in range(Config.NUM_WORKERS)]
+# cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
+# blockchain = Blockchain()
+# node_manager = NodeManager()
+# node_manager.create_nodes()
+# node_manager.assign_roles()
+# node_manager.print_nodes()
+# WorkerNode pool 
+
+blockchain = Blockchain(
+    committee=[],
+    all_nodes=[f"node{i}" for i in range(1, 11)]
+)
+
+node_manager = NodeManager(blockchain)
+node_manager.create_nodes()
+cluster_heads = [
+    ClusterHead(i) for i in range(Config.NUM_CLUSTERS)
+]
+
+# workers = node_manager.workers
+# cluster_heads = node_manager.cluster_heads
+
+# blockchain = Blockchain(
+#     committee=[n.node_id for n in node_manager.committee],
+#     all_nodes=[n.node_id for n in node_manager.nodes]
+# )
+
+
+
 
 # BIẾN TOÀN CỤC LƯU LỊCH SỬ
 history = {
@@ -29,19 +61,69 @@ def home():
 @app.route('/run_round', methods=['POST'])
 def run_simulation_round():
     """Chạy 1 vòng lặp và LƯU kết quả vào history"""
+    global cluster_heads
+    node_manager.assign_roles()
+    blockchain.committee = [n.node_id for n in node_manager.committee]
+
+    node_manager.print_nodes()
+
+    proposer = node_manager.proposer
+    committee = node_manager.committee
+    workers = node_manager.workers
     
     # --- [Phần logic chạy hệ thống giữ nguyên] ---
     # 1. Clustering
     cluster_models = {ch.cluster_id: ch.global_model.state_dict() for ch in cluster_heads}
+    clusters = {i: [] for i in range(Config.NUM_CLUSTERS)}
     for w in workers:
-        w.join_cluster(cluster_models)
+        worker = w.worker
+        worker.join_cluster(cluster_models)
+        w.cluster_id = worker.cluster_id   # đồng bộ Node ← Worker
+        clusters[w.cluster_id].append(w)
+
+    # Bầu Cluster Head cho mỗi cluster
+    new_cluster_heads = []
+    for cluster_id, members in clusters.items():
+        if not members:
+            continue
+        ch_node = max(
+            members,
+            key=lambda n: blockchain.reputation_scores[n.node_id]
+        )
+        ch = ClusterHead(cluster_id)
+        ch.node_id = ch_node.node_id
+        new_cluster_heads.append(ch)
+    cluster_heads = new_cluster_heads
+    print(f"\nSelected Cluster Heads: {[ch.node_id for ch in cluster_heads]}")
+
+
 
     # 2. Training & LDP
+    # for w in workers:
+    #     params = w.train()
+    #     noisy_params = w.apply_ldp(params)
+    #     target_ch = next(ch for ch in cluster_heads if ch.cluster_id == w.cluster_id)
+    #     target_ch.receive_update(w.id, noisy_params)
+
     for w in workers:
-        params = w.train()
-        noisy_params = w.apply_ldp(params)
+        worker = w.worker 
+        params = worker.train()
+        noisy_params = worker.apply_ldp(params)
         target_ch = next(ch for ch in cluster_heads if ch.cluster_id == w.cluster_id)
-        target_ch.receive_update(w.id, noisy_params)
+        target_ch.receive_update(w.node_id, noisy_params)
+
+    # for node in workers:              # workers là Node
+    #     worker = node.worker          # lấy WorkerNode
+
+    #     params = worker.train()
+    #     noisy_params = worker.apply_ldp(params)
+
+    #     target_ch = next(
+    #         ch for ch in cluster_heads
+    #         if ch.cluster_id == node.cluster_id
+    #     )
+    #     target_ch.receive_update(node.node_id, noisy_params)
+
 
     # 3. Aggregation & Metrics Calculation
     current_accuracies = []
@@ -61,10 +143,11 @@ def run_simulation_round():
         simulated_accuracy = min(90, 20 + len(blockchain.chain) * 2 + random.uniform(-2, 5))
         # 4. Gửi đề xuất lên Blockchain (MỚI: Truyền accuracy và ID cụ thể)
         success = blockchain.propose_update(
-            cluster_id=ch.cluster_id, 
+            proposer_id=ch.node_id,
             aggregated_model_hash=model_hash,
             accuracy=simulated_accuracy
         )
+
         if success:
             round_status = "Success"
             avg_acc = simulated_accuracy

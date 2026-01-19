@@ -1,12 +1,9 @@
-# Xử lý các thuật toán chính: CoCo, BALANCE, Aggregation
+# Xử lý các thuận toán chính: CoCo, BALANCE, Aggregation
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 from app.models.cnn import SimpleCNN
 from config import Config
-
-# Class này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
+# Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
     def __init__(self, node_id, data_loader):
         self.id = node_id
@@ -14,37 +11,18 @@ class WorkerNode:
         self.device = Config.DEVICE
         self.model = SimpleCNN().to(self.device)
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
-        self.loss_fn = nn.CrossEntropyLoss()
 
     def evaluate_loss_on_model(self, model_state):
-        """Bước 1: Tính Loss để chọn cụm, (DFCA)"""
+        """Bước 1: Tính Loss để chọn cụm (DFCA)"""
         self.model.load_state_dict(model_state)
-        self.model.eval()
-        
-        total_loss = 0.0
-        total_samples = 0
-        
-        with torch.no_grad():
-            for X, y in self.data_loader:
-                X, y = X.to(self.device), y.to(self.device)
-                preds = self.model(X)
-                loss = self.loss_fn(preds, y) 
-                
-                total_loss += loss.item() * X.size(0)
-                total_samples += X.size(0)
-                
-        return total_loss / total_samples if total_samples > 0 else float('inf')
+        # ... logic tính loss trên local data ...
+        return np.random.random() # Mock return loss
 
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
-        losses = {}
-        for cid, model_state in cluster_models.items():
-            loss = self.evaluate_loss_on_model(model_state)
-            losses[cid] = loss
-            
+        losses = {cid: self.evaluate_loss_on_model(model) for cid, model in cluster_models.items()}
         self.cluster_id = min(losses, key=losses.get)
-        print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
-
+        print(f"Worker {self.id} joined Cluster {self.cluster_id}")
 
     def train(self, epochs=1):
         """Bước 2: Huấn luyện cục bộ (Local Training)"""
