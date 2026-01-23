@@ -45,7 +45,8 @@ class WorkerNode:
         self.cluster_id = min(losses, key=losses.get)
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
 
-
+    """trainning and aggregate"""
+    
     def train(self, epochs=1):
         """Bước 2: Huấn luyện cục bộ (Local Training)"""
         self.model.train()
