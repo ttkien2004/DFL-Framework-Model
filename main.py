@@ -14,16 +14,6 @@ from app.blockchain.node_manager import NodeManager
 
 app = Flask(__name__)
 
-# Khởi tạo hệ thống giả lập
-# worker_pools = [WorkerNode(i, None) for i in range(Config.NUM_WORKERS)]
-# cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
-# blockchain = Blockchain()
-# node_manager = NodeManager()
-# node_manager.create_nodes()
-# node_manager.assign_roles()
-# node_manager.print_nodes()
-# WorkerNode pool 
-
 blockchain = Blockchain(
     committee=[],
     all_nodes=[f"node{i}" for i in range(1, 11)]
@@ -34,16 +24,6 @@ node_manager.create_nodes()
 cluster_heads = [
     ClusterHead(i) for i in range(Config.NUM_CLUSTERS)
 ]
-
-# workers = node_manager.workers
-# cluster_heads = node_manager.cluster_heads
-
-# blockchain = Blockchain(
-#     committee=[n.node_id for n in node_manager.committee],
-#     all_nodes=[n.node_id for n in node_manager.nodes]
-# )
-
-
 
 
 # BIẾN TOÀN CỤC LƯU LỊCH SỬ
@@ -62,6 +42,7 @@ def home():
 def run_simulation_round():
     """Chạy 1 vòng lặp và LƯU kết quả vào history"""
     global cluster_heads
+    round_status = "Failed"
     node_manager.assign_roles()
     blockchain.committee = [n.node_id for n in node_manager.committee]
 
@@ -71,7 +52,6 @@ def run_simulation_round():
     committee = node_manager.committee
     workers = node_manager.workers
     
-    # --- [Phần logic chạy hệ thống giữ nguyên] ---
     # 1. Clustering
     cluster_models = {ch.cluster_id: ch.global_model.state_dict() for ch in cluster_heads}
     clusters = {i: [] for i in range(Config.NUM_CLUSTERS)}
@@ -81,7 +61,13 @@ def run_simulation_round():
         w.cluster_id = worker.cluster_id   # đồng bộ Node ← Worker
         clusters[w.cluster_id].append(w)
 
-    # Bầu Cluster Head cho mỗi cluster
+    # Map: cluster_id -> list[node_id]
+    cluster_members_map = {
+        cid: [n.node_id for n in members]
+        for cid, members in clusters.items()
+    }
+
+    # Bầu Cluster Head cho cluster
     new_cluster_heads = []
     for cluster_id, members in clusters.items():
         if not members:
@@ -112,19 +98,6 @@ def run_simulation_round():
         target_ch = next(ch for ch in cluster_heads if ch.cluster_id == w.cluster_id)
         target_ch.receive_update(w.node_id, noisy_params)
 
-    # for node in workers:              # workers là Node
-    #     worker = node.worker          # lấy WorkerNode
-
-    #     params = worker.train()
-    #     noisy_params = worker.apply_ldp(params)
-
-    #     target_ch = next(
-    #         ch for ch in cluster_heads
-    #         if ch.cluster_id == node.cluster_id
-    #     )
-    #     target_ch.receive_update(node.node_id, noisy_params)
-
-
     # 3. Aggregation & Metrics Calculation
     current_accuracies = []
     current_losses = []
@@ -141,12 +114,20 @@ def run_simulation_round():
         acc = random.uniform(20, 35) + len(blockchain.chain) * 0.5 # Giả lập acc tăng dần
         loss = max(0.1, 1.0 - len(blockchain.chain) * 0.02)        # Giả lập loss giảm dần
         simulated_accuracy = min(90, 20 + len(blockchain.chain) * 2 + random.uniform(-2, 5))
+        print(f"Cluster {ch.cluster_id} proposed model with Acc: {simulated_accuracy:.2f}%, Loss: {loss:.4f}")
         # 4. Gửi đề xuất lên Blockchain (MỚI: Truyền accuracy và ID cụ thể)
+        # success = blockchain.propose_update(
+        #     proposer_id=ch.node_id,
+        #     aggregated_model=agg_model,
+        #     cluster_members=cluster_members_map.get(ch.cluster_id, []),
+        #     committee_nodes=node_manager.committee
+        # )
         success = blockchain.propose_update(
             proposer_id=ch.node_id,
-            aggregated_model_hash=model_hash,
-            accuracy=simulated_accuracy
+            aggregated_model=agg_model,
+            cluster_members=cluster_members_map.get(ch.cluster_id, [])
         )
+
 
         if success:
             round_status = "Success"
@@ -157,7 +138,9 @@ def run_simulation_round():
 
     # Tính trung bình toàn mạng
     avg_accuracy = sum(current_accuracies) / len(current_accuracies)
+    print("Avg Accuracy this round:", avg_accuracy)
     avg_loss = sum(current_losses) / len(current_losses)
+    
 
     # 4. Blockchain Consensus
     # success = blockchain.propose_update(aggregated_updates)

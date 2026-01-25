@@ -18,7 +18,7 @@ class NodeManager:
         self.workers = []
 
     def create_nodes(self):
-        """Tạo 10 node node1 → node10"""
+        """Tạo 10 node node1 -> node10"""
         self.nodes = [
             Node(f"node{i}")
             for i in range(1, 11)
@@ -34,8 +34,8 @@ class NodeManager:
         self.workers = workers
 
     def choose_roles_smart(self):
-        # 1. Lọc node có ích
-        positive_nodes = [n for n in self.nodes if self.blockchain.reputation_scores[n.node_id] > 0]
+        # 1. Lọc node có ích ( reputation > MIN_REPUTATION )
+        positive_nodes = [n for n in self.nodes if self.blockchain.reputation_scores[n.node_id] > Config.MIN_REPUTATION]
         target_pool = positive_nodes if positive_nodes else self.nodes
         # scores = [n.rep_score for n in target_pool]
         scores = [
