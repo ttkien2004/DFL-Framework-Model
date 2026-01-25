@@ -8,6 +8,8 @@ def get_model(model_name, num_classes=10):
     """
     Factory function để lấy mô hình theo tên
     """
+    model_name = model_name.lower()
+    
     if model_name == 'resnet18':
         model = models.resnet18(weights=None)
         

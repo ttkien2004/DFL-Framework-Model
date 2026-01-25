@@ -2,8 +2,9 @@
 from abc import ABC, abstractmethod
 
 class BaseScenario(ABC):
-    def __init__(self, config):
+    def __init__(self, workers, config):
         self.config = config
+        self.workers = workers
 
     @abstractmethod
     def setup_data(self, workers, dataset_name):

@@ -5,19 +5,22 @@ from config import Config
 from app.utils.helpers import federated_averaging, compute_euclidean_distance, compute_model_hash
 from app.core.coco_helpers import CoCo
 from app.core.balance_helpers import Balance
-# Class này xử lý CoCom lọc BALANCE và tổng hợp
-class ClusterHead:
-    def __init__(self, cluster_id, dataset_name='cifar10'):
-        self.cluster_id = cluster_id
-        self.global_model = SimpleCNN().to(Config.DEVICE)
+from app.core.worker import WorkerNode
+from app.models.cnn import get_model
+# Class này xử lý CoCo lọc BALANCE và tổng hợp
+class ClusterHead(WorkerNode):
+    def __init__(self, cluster_id, config, device):
+        super().__init__(cluster_id, config, device)
         self.members = []
+        self.is_head = False
 
-        self.reload_model(dataset_name)
         # Khởi tạo model dựa trên Config
-        try:
-            self.global_model = get_model(Config.MODEL_NAME).to(Config.DEVICE)
-        except:
-            self.global_model = SimpleCNN().to(Config.DEVICE)
+        model_name = config.get('model')
+        self.global_model = get_model(model_name, num_classes=self.num_classes).to(self.device)
+        # try:
+        #     self.global_model = get_model(Config.MODEL_NAME).to(Config.DEVICE)
+        # except:
+        #     self.global_model = SimpleCNN().to(Config.DEVICE)
 
         # Trạng thái Topology của cụm
         self.topology_matrix = None
