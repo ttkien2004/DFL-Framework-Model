@@ -1,7 +1,5 @@
-# Xử lý các thuật toán chính: CoCo, BALANCE, Aggregation
+# Xử lý các thuận toán chính: CoCo, BALANCE, Aggregation
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 from app.models.cnn import SimpleCNN
 from config import Config
@@ -16,7 +14,6 @@ class WorkerNode:
         self.device = Config.DEVICE
         self.model = SimpleCNN().to(self.device)
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
-        self.loss_fn = nn.CrossEntropyLoss()
 
     def evaluate_loss_on_model(self, model_state):
         """Bước 1: Tính Loss để chọn cụm, (DFCA)"""
@@ -39,11 +36,7 @@ class WorkerNode:
 
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
-        losses = {}
-        for cid, model_state in cluster_models.items():
-            loss = self.evaluate_loss_on_model(model_state)
-            losses[cid] = loss
-            
+        losses = {cid: self.evaluate_loss_on_model(model) for cid, model in cluster_models.items()}
         self.cluster_id = min(losses, key=losses.get)
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
 
