@@ -22,15 +22,11 @@ class Config:
 
     # --- 3. Cấu hình Huấn luyện (Training Hyperparameters) ---
     DATASET_NAME = 'CIFAR10' # Hoặc 'MNIST'
+    MODEL_NAME = 'simple_cnn'
     LOCAL_EPOCHS = 1         # Số epoch train tại mỗi worker mỗi vòng
     BATCH_SIZE = 32
     LEARNING_RATE = 0.01
     MOMENTUM = 0.9
-
-    # --- 4. Cấu hình Bảo mật (Privacy & Security) ---
-    # Local Differential Privacy (LDP)
-    ENABLE_LDP = True        # Bật/Tắt LDP
-    LDP_EPSILON = 0.5        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
     
     # Secure Aggregation / Encryption
     ENABLE_ENCRYPTION = False # (Giai đoạn sau)
@@ -60,4 +56,17 @@ class Config:
     ACCURACY_BONUS_FACTOR = 0.5      # Hệ số nhân thưởng theo độ chính xác (VD: Acc 30% -> Bonus 15 điểm)
     DECAY_FACTOR = 0.99              # Hệ số giảm dần theo thời gian (để khuyến khích đóng góp liên tục)
 
+    # BALANCE
+    BALANCE_GAMMA = 0.3
+    BALANCE_BETA = 0.5
+    BALANCE_LAMBDA = 1.0
+    BALANCE_Q0 = 0.01
+
+    # LDP Config
+    # Local Differential Privacy (LDP)
+    ENABLE_LDP = True        # Bật/Tắt LDP
+    LDP_EPSILON = 0.5        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
+    LDP_CLIPPING_THRESHOLD = 1.5
+    LDP_SIGMA = 0.5 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
+    LDP_DELTA = 1e-5
     ACC_THRESHOLD = 30.0   # k
