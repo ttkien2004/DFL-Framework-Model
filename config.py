@@ -48,7 +48,11 @@ class Config:
     REWARD_COMMITTEE_VOTE = 1.0      # Thưởng cho thành viên Ủy ban vì đã bỏ phiếu
     PENALTY_REJECTED_BLOCK = -10.0   # Phạt nặng CH nếu gửi model rác
     PENALTY_MALICIOUS = -20.0        # Phạt nếu phát hiện tấn công
-    
+    w_COM = 40.0
+    w_TRAIN = 40.0
+    w_TIME = 20.0
+    PENALTY = 80.0
+
     ACCURACY_BONUS_FACTOR = 0.5      # Hệ số nhân thưởng theo độ chính xác (VD: Acc 30% -> Bonus 15 điểm)
     DECAY_FACTOR = 0.99              # Hệ số giảm dần theo thời gian (để khuyến khích đóng góp liên tục)
 
@@ -65,3 +69,4 @@ class Config:
     LDP_CLIPPING_THRESHOLD = 1.5
     LDP_SIGMA = 0.5 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
     LDP_DELTA = 1e-5
+    ACC_THRESHOLD = 30.0   # k

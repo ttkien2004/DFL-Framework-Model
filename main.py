@@ -1,4 +1,6 @@
 # File chạy chính
+from platform import node
+from platform import node
 from flask import Flask, jsonify, request, render_template
 from app.core.worker import WorkerNode
 from app.core.cluster_head import ClusterHead
@@ -12,6 +14,9 @@ from app.utils.history import update_history_dynamic
 from collections import defaultdict
 import time
 
+from app.blockchain.node_manager import NodeManager
+
+
 app = Flask(__name__)
 
 # Khởi tạo hệ thống giả lập
@@ -19,6 +24,17 @@ app = Flask(__name__)
 # cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
 # blockchain = Blockchain()
 engine = SimulationEngine()
+blockchain = Blockchain(
+    committee=[],
+    all_nodes=[f"node{i}" for i in range(1, 11)]
+)
+
+node_manager = NodeManager(blockchain)
+node_manager.create_nodes()
+cluster_heads = [
+    ClusterHead(i) for i in range(Config.NUM_CLUSTERS)
+]
+
 
 # BIẾN TOÀN CỤC LƯU LỊCH SỬ
 history = {
