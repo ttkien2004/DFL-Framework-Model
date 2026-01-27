@@ -5,32 +5,51 @@ import json
 from wsgiref.validate import validator
 from config import Config
 from app.blockchain.block import Block
+from app.utils.secret_sharing import SecretSharingUtils
+from app.utils.crypto import CryptoUtils
 
 from app.blockchain.validator import Validator
 from app.blockchain.data_loader import get_global_val_loader
-
+import torch
+import os
 
 class Blockchain:
-    def __init__(self, committee, all_nodes):
+    def __init__(self,storage_dir="./chain_storage"):
         self.chain = [self.create_genesis_block()]
-        self.committee = committee
+        self.committee = []
         self.reputation_scores = {}
         self.fault = {}
+        self.storage_dir = storage_dir
+        # all_nodes = committee_config.get('workers', [])
         
-        self._initialize_reputation(all_nodes)
-        self._initialize_faults(all_nodes)
+        # self._initialize_reputation(all_nodes)
+        # self._initialize_faults(all_nodes)
     
-    def _initialize_reputation(self, all_nodes):
+    def initialize_reputation(self, all_nodes):
         """Khởi tạo điểm cho các node tham gia"""
         for node in all_nodes:
-            self.reputation_scores[node] = Config.INITIAL_REPUTATION
-    
-    def _initialize_faults(self, all_nodes):
-        for node in all_nodes:
-            self.fault[node] = 0
+            node_id = node.id if hasattr(node, 'id') else node
 
+            self.reputation_scores[node_id] = Config.INITIAL_REPUTATION
+    
+    def initialize_faults(self, all_nodes):
+        for node in all_nodes:
+            node_id = node.id if hasattr(node, 'id') else node
+            self.fault[node_id] = 0
+
+    def _save_model_offchain(self, model_state_dict, cluster_id, model_hash):
+        """
+        Lưu model xuống đĩa và trả về đường dẫn.
+        """
+        filename = f"cluster_{cluster_id}_ver_{model_hash[:8]}.pth"
+        path = os.path.join(self.storage_dir, filename)
+        
+        torch.save(model_state_dict, path)
+        print(f"[Storage] Model saved to {path}")
+        return path
+    
     def create_genesis_block(self):
-        return Block(0, "0", "Genesis Model", time.time())
+        return Block(0, "0", [], time.time())
 
     def get_latest_block(self):
         return self.chain[-1]
@@ -144,6 +163,10 @@ class Blockchain:
     #     print(f"New Reputation Score: {self.reputation_scores[proposer_id]}")
     #     print("--------------------------------------------------\n")
 
+    
+    
+    
+        
     def propose_update(self, proposer_id, aggregated_model, cluster_members):
         votes = {}
         scores = {}
@@ -153,7 +176,7 @@ class Blockchain:
 
         
         validators = {
-            v: Validator(v)
+            v.id: Validator(node_id=v.id,config=v.config,device=v.device)
             for v in self.committee
         }
 
@@ -188,11 +211,44 @@ class Blockchain:
             return True
         return False
 
-
-
-
     def add_block(self, data):
         prev_block = self.get_latest_block()
+        print("Prev Block is None?", prev_block, flush=True)
+        if prev_block is None:
+            self.chain = [self.create_genesis_block()]
+            prev_block = self.get_last_block()
+        
         new_block = Block(len(self.chain), prev_block.hash, data, time.time())
         self.chain.append(new_block)
         print(f"Block #{new_block.index} added to Ledger.")
+
+    def is_valid_new_block(self, new_block, previous_block):
+        """
+        Kiểm tra tính hợp lệ của Block mới trước khi thêm vào chuỗi.
+        """
+        # 1. Kiểm tra Index (Phải tăng tịnh tiến 1 đơn vị)
+        if previous_block.index + 1 != new_block.index:
+            print(f"[Blockchain Error] Invalid Index: Expected {previous_block.index + 1}, got {new_block.index}")
+            return False
+
+        # 2. Kiểm tra Previous Hash (Mắt xích quan trọng nhất)
+        if previous_block.hash != new_block.previous_hash:
+            print(f"[Blockchain Error] Invalid Previous Hash link!")
+            return False
+
+        # 3. Kiểm tra tính toàn vẹn (Re-hash)
+        # Tính lại hash của new_block xem có khớp với hash đang lưu trong nó không
+        # Điều này đảm bảo dữ liệu (data/timestamp) không bị ai đó sửa đổi trộm sau khi Block được tạo
+        recalculated_hash = new_block.compute_hash()
+        
+        if new_block.hash != recalculated_hash:
+            print(f"[Blockchain Error] Invalid Block Hash (Data tampered)!")
+            return False
+
+        # (Tùy chọn) 4. Kiểm tra Timestamp
+        # Block mới không được sinh ra trước Block cũ (ngăn chặn tấn công thời gian)
+        if new_block.timestamp < previous_block.timestamp:
+            print(f"[Blockchain Error] Backdated timestamp! New block is older than previous block.")
+            return False
+
+        return True

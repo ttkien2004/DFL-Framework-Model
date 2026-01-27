@@ -70,3 +70,6 @@ class Config:
     LDP_SIGMA = 0.5 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
     LDP_DELTA = 1e-5
     ACC_THRESHOLD = 30.0   # k
+
+    # Cấu hình của Secret Sharing
+    T_THRESHOLD = 2

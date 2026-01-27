@@ -2,14 +2,16 @@ import torch
 import numpy as np
 from app.models.cnn import SimpleCNN, get_model
 from config import Config
-from app.utils.helpers import federated_averaging, compute_euclidean_distance, compute_model_hash
+from app.utils.helpers import federated_averaging, compute_euclidean_distance, compute_model_hash, compute_model_norm
 from app.core.coco_helpers import CoCo
 from app.core.balance_helpers import Balance
 from app.core.worker import WorkerNode
+from app.blockchain.proposer import Proposer
 from app.models.cnn import get_model
+from app.utils.secret_sharing import SecretSharingUtils
 # Class này xử lý CoCo lọc BALANCE và tổng hợp
-class ClusterHead(WorkerNode):
-    def __init__(self, cluster_id, config, device):
+class ClusterHead(Proposer):
+    def __init__(self, cluster_id, config, device, committee_info=None):
         super().__init__(cluster_id, config, device)
         self.members = []
         self.is_head = False
@@ -33,6 +35,16 @@ class ClusterHead(WorkerNode):
 
         self.pending_models = [] # Bộ nhớ tạm để chứa model worker gửi lên
 
+        # Lưu trữ public key của committee
+        self.committee_keys = None
+        self.threshold = None
+        self.num_committee = None
+
+    def set_committee_info(self, committee_config):
+        if committee_config is not None:
+            self.committee_keys = committee_config['public_keys'] 
+            self.threshold = committee_config['t']
+            self.num_committee = committee_config['n']
     def reload_model(self, dataset_name):
         if dataset_name == 'gtsrb': num_classes = 43
         else: num_classes = 10
@@ -217,24 +229,70 @@ class ClusterHead(WorkerNode):
         Bước 5: Tổng hợp mô hình
         """
         # Gọi hàm lọc với tham số round_k
+        # DEBUG LOGGING -----------------------------------------
+        total_received = len(self.pending_models)
+        print(f"[Debug Cluster {self.cluster_id}] Received {total_received} updates in pending_models.")
+        # -------------------------------------------------------
+
+        # Gọi hàm lọc với tham số round_k
         updates = self.balance_filtering(round_k)
+        
+        # DEBUG LOGGING -----------------------------------------
+        accepted_count = len(updates)
+        print(f"[Debug Cluster {self.cluster_id}] After filtering: {accepted_count}/{total_received} accepted.")
+        # -------------------------------------------------------
         
         # Reset bộ nhớ đệm
         self.pending_models = []
-
+        
         if not updates:
             print(f"Cluster {self.cluster_id}: All updates rejected or empty.")
             # Trả về model cũ nếu không ai đạt chuẩn
             model_hash = compute_model_hash(self.global_model.state_dict())
-            return self.global_model.state_dict(), model_hash
-        
+            # return self.global_model.state_dict(), model_hash
+            return {
+                "metadata": None,           # Không có dữ liệu mới
+                "encrypted_shares": None,   # Không có mảnh bí mật
+                "model_hash": model_hash
+            }
         # Tổng hợp FedAvg
         avg_state = federated_averaging(updates)
         self.global_model.load_state_dict(avg_state)
         
+        # Tính norm
+        model_norm = compute_model_norm(avg_state)
         # Tính Hash
         model_hash = compute_model_hash(avg_state)
+        ## Phân mảnh bí mật (SHAMIR SECRET SHARING)
+        flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
+
+        with open("avg_model.txt", "w", encoding="utf-8") as f:
+            f.write(str(avg_state))
+        # Tạo n mảnh bí mật
+        # t: Ngưỡng, n: số thành viên ủy ban
+        raw_shares = SecretSharingUtils.generate_shares(
+            flat_weights, 
+            n=self.num_committee, 
+            t=self.threshold
+        )
+        # Phân phối an toàn thông qua mã hóa từng mảnh
+        encrypted_packets = {}
+        committee_ids = sorted(list(self.committee_keys.keys()))
+
+        for i, member_id in enumerate(committee_ids, start=1):
+            share_vector = raw_shares[i]
+            pub_key = self.committee_keys[member_id]
+
+            encrypted_pkg = SecretSharingUtils.encrypt_share(share_vector, pub_key)
+
+            encrypted_packets[member_id] = encrypted_pkg
 
         self.pending_models = []
         
-        return self.global_model.state_dict(), model_hash
+        # return self.global_model.state_dict(), model_hash
+        return {
+            "metadata": metadata,
+            "encrypted_shares": encrypted_packets,
+            "model_hash": model_hash,
+            "model_norm": model_norm
+        }

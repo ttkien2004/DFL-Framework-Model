@@ -4,7 +4,7 @@ import numpy as np
 import hashlib
 import json
 import copy
-
+import math
 # --- 1. CHUYỂN ĐỔI DỮ LIỆU (SERIALIZATION) ---
 
 def model_to_json(state_dict):
@@ -79,3 +79,17 @@ def compute_euclidean_distance(w1, w2):
         distance += torch.sum(diff ** 2).item()
     
     return np.sqrt(distance)
+
+def compute_model_norm(state_dict):
+    """
+    Tính L2 Norm (Độ lớn vector) của toàn bộ model.
+    Dùng để so sánh "mềm" thay vì Hash SHA256.
+    """
+    total_norm_sq = 0.0
+    for key, tensor in state_dict.items():
+        # Tính bình phương L2 norm của từng layer và cộng dồn
+        # Chuyển về float để tránh overflow
+        norm = tensor.float().norm(2).item()
+        total_norm_sq += norm ** 2
+        
+    return math.sqrt(total_norm_sq)

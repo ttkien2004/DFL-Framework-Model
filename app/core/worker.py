@@ -27,7 +27,7 @@ class WorkerNode:
         )
         model_name = config.get('model', 'simple_cnn')
         self.model = get_model(model_name, num_classes=self.num_classes).to(self.device)
-        # self.model = SimpleCNN(num_classes=self.num_classes).to(self.device)
+
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
         self.cluster_head_id = None
 
@@ -72,12 +72,13 @@ class WorkerNode:
         
         total_loss = 0.0
         total_samples = 0
+        loss_fn = torch.nn.CrossEntropyLoss()
         
         with torch.no_grad():
             for X, y in self.data_loader:
                 X, y = X.to(self.device), y.to(self.device)
                 preds = self.model(X)
-                loss = self.loss_fn(preds, y) 
+                loss = loss_fn(preds, y) 
                 
                 total_loss += loss.item() * X.size(0)
                 total_samples += X.size(0)
@@ -87,15 +88,17 @@ class WorkerNode:
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
         losses = {cid: self.evaluate_loss_on_model(model) for cid, model in cluster_models.items()}
-        self.cluster_id = min(losses, key=losses.get)
+        best_cid = min(losses, key=losses.get)
+        min_loss = losses[best_cid]
+
+        self.cluster_id = best_cid
+        self.current_loss = min_loss
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
 
     def train(self):
         """Bước 2: Huấn luyện cục bộ (Local Training)"""
         # self.model.train()
         # # ... logic training loop (SGD) ...
-        # print(f"Worker {self.id} finished training.")
-        # return self.model.state_dict()
         self.optimizer = torch.optim.SGD(self.model.parameters(), 
                                    lr=self.config.get('learning_rate', 0.01),
                                    momentum=0.9)
@@ -146,23 +149,23 @@ class WorkerNode:
         # --- BƯỚC B: CỘNG NHIỄU GAUSS - Công thức (30) ---
         
     # Local update
-    def train(self, local_epochs=1):
-        """ Huấn luyện cục bộ bằng SGD
-        """
-        self.model.train()
+    # def train(self, local_epochs=1):
+    #     """ Huấn luyện cục bộ bằng SGD
+    #     """
+    #     self.model.train()
 
-        for epoch in range(local_epochs):
-            for X, y in self.data_loader:
-                X, y = X.to(self.device), y.to(self.device)
+    #     for epoch in range(local_epochs):
+    #         for X, y in self.data_loader:
+    #             X, y = X.to(self.device), y.to(self.device)
 
-                self.optimizer.zero_grad()
-                preds = self.model(X)
-                loss = self.loss_fn(preds, y)
-                loss.backward()
-                self.optimizer.step()
+    #             self.optimizer.zero_grad()
+    #             preds = self.model(X)
+    #             loss = self.loss_fn(preds, y)
+    #             loss.backward()
+    #             self.optimizer.step()
 
-        print(f"[Worker {self.id}] finished local training.")
-        return self.model.state_dict()
+    #     print(f"[Worker {self.id}] finished local training.")
+    #     return self.model.state_dict()
 
     # Tổng hợp mô hình 
     def graph_sequential_aggregate(worker_states, adjacency_matrix):
@@ -206,8 +209,33 @@ class WorkerNode:
 
 
 
-    def apply_ldp(self, params, epsilon=0.5):
-        """Bước 3: Thêm nhiễu LDP (Gaussian/Laplace)"""
+    def apply_ldp(self, params):
+        """
+        Thực hiện LDP-Gauss theo 2 bước: Clipping và Adding Noise.
+        Input: params (state_dict của model sau khi train)
+        Output: noisy_params (state_dict đã được bảo vệ)
+        """
+        if not Config.ENABLE_LDP:
+            return params
+
+        # --- BƯỚC A: CẮT GỌN THAM SỐ (CLIPPING) - Công thức (29) ---
+        
+        # 1. Tính chuẩn L2 toàn cục (Global L2 Norm) của vector trọng số ||w_i||
+        total_norm = 0.0
+        for v in params.values():
+            # Chỉ tính norm trên các tensor kiểu float (bỏ qua int64 như buffer đếm bước)
+            if v.dtype in [torch.float, torch.float32, torch.float64]:
+                param_norm = v.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = math.sqrt(total_norm)
+
+        # 2. Tính hệ số cắt gọn (Clipping Scale)
+        # scale = max(1, ||w_i|| / C)
+        clip_threshold = Config.LDP_CLIPPING_THRESHOLD
+        clip_scale = max(1.0, total_norm / clip_threshold)
+
+        # --- BƯỚC B: CỘNG NHIỄU GAUSS - Công thức (30) ---
+        
         noisy_params = {}
         sigma = LDP.get_ldp_sigma() # Độ lệch chuẩn của nhiễu
         

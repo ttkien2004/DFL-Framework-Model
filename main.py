@@ -24,16 +24,6 @@ app = Flask(__name__)
 # cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
 # blockchain = Blockchain()
 engine = SimulationEngine()
-blockchain = Blockchain(
-    committee=[],
-    all_nodes=[f"node{i}" for i in range(1, 11)]
-)
-
-node_manager = NodeManager(blockchain)
-node_manager.create_nodes()
-cluster_heads = [
-    ClusterHead(i) for i in range(Config.NUM_CLUSTERS)
-]
 
 
 # BIẾN TOÀN CỤC LƯU LỊCH SỬ
@@ -76,25 +66,13 @@ def run_simulation_round():
         # Gọi hàm khởi tạo lại toàn bộ worker & topology
         engine.initialize_system(req_data)
         global history, blockchain
-        blockchain = Blockchain()
         # history = {"rounds": [], "system_mode": [], "blockchain_height": []}
         history = defaultdict(list)
         current_round = 0
-        engine.set_blockchain_ref(blockchain_ref=blockchain)
-        # RESET lại History và Blockchain để bắt đầu thí nghiệm mới sạch sẽ
-        # (Nếu bạn muốn giữ history để so sánh trên cùng 1 biểu đồ thì bỏ dòng reset này đi)
-        # global history, blockchain
-        # blockchain = Blockchain() # Reset chuỗi
-        # history = {
-        #     "rounds": [], 
-        #     "accuracy": [], 
-        #     "blockchain_height": [],
-        #     "system_mode": []
-        # }
-        # current_round = 0
+        blockchain = engine.blockchain
     else:
         # Nếu cùng mode, tiếp tục vòng lặp
-        current_round = len(history["rounds"])
+        current_round = len(history["rounds"]) + 1
 
     # Truyền blockchain vào engine (nếu hệ thống Proposed cần dùng)
     if hasattr(engine, 'set_blockchain_ref'):

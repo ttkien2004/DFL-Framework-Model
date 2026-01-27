@@ -15,10 +15,9 @@ class Block:
         """
         self.index = index
         self.previous_hash = previous_hash
+        # self.cluster_id = cluster_id
         self.data = data 
         self.timestamp = timestamp or time.time()
-        
-        # Tính toán mã băm của chính block này ngay khi khởi tạo
         self.hash = self.compute_hash()
 
     def compute_hash(self):
