@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>BCFL Simulation Dashboard</title>
+		<title>Hệ thống Giám sát BCFL</title>
 		<link
 			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
 			rel="stylesheet"
@@ -11,67 +11,111 @@
 		<style>
 			body {
 				padding: 20px;
-				background-color: #f8f9fa;
+				background-color: #f4f6f9;
 			}
 			.card {
-				box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+				box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+				border: none;
+				margin-bottom: 20px;
 			}
-			.status-badge {
-				font-weight: bold;
+			.metric-value {
+				font-weight: 700;
+			}
+			/* Màu sắc cho các chỉ số */
+			.text-acc {
+				color: #2ecc71;
+			}
+			.text-loss {
+				color: #e74c3c;
+			}
+			.text-dist {
+				color: #9b59b6;
+			}
+			.text-time {
+				color: #3498db;
+			}
+
+			/* Hiệu ứng cho chế độ tấn công */
+			.attack-mode-theme .card-header {
+				background-color: #c0392b !important;
+			}
+			.baseline-mode-theme .card-header {
+				background-color: #2c3e50 !important;
 			}
 		</style>
 	</head>
 	<body>
-		<div class="container">
-			<div class="text-center mb-4">
-				<h1 class="display-6">BCFL CoCo Cluster Dashboard</h1>
-				<p class="text-muted">
-					Theo dõi tiến trình huấn luyện theo thời gian thực
-				</p>
+		<div class="container-fluid">
+			<div class="d-flex justify-content-between align-items-center mb-4">
+				<div>
+					<h2 class="mb-0">BCFL Live Monitor</h2>
+					<small class="text-muted"
+						>Federated Learning over Blockchain Consensus</small
+					>
+				</div>
+				<div>
+					<span id="scenarioBadge" class="badge bg-secondary fs-6"
+						>Loading Scenario...</span
+					>
+					<span id="statusBadge" class="badge bg-warning text-dark fs-6"
+						>Waiting...</span
+					>
+				</div>
 			</div>
 
-			<div class="row mb-4 text-center">
-				<div class="col-md-4">
-					<div class="card p-3 border-primary">
-						<h5>Vòng hiện tại</h5>
-						<h2 id="currentRound" class="text-primary">0</h2>
+			<div class="row text-center">
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Round</small>
+						<h3 id="valRound">0</h3>
 					</div>
 				</div>
-				<div class="col-md-4">
-					<div class="card p-3 border-success">
-						<h5>Độ chính xác (Accuracy)</h5>
-						<h2 id="currentAcc" class="text-success">0%</h2>
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Global Accuracy</small>
+						<h3 id="valAcc" class="text-acc">0%</h3>
 					</div>
 				</div>
-				<div class="col-md-4">
-					<div class="card p-3 border-danger">
-						<h5>Độ mất mát (Loss)</h5>
-						<h2 id="currentLoss" class="text-danger">0</h2>
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Global Loss</small>
+						<h3 id="valLoss" class="text-loss">0</h3>
+					</div>
+				</div>
+				<div class="col-md-3">
+					<div class="card p-3">
+						<small class="text-muted">Consensus Distance</small>
+						<h3 id="valDist" class="text-dist">0</h3>
+					</div>
+				</div>
+				<div class="col-md-3">
+					<div class="card p-3">
+						<small class="text-muted">Avg Latency</small>
+						<h3 id="valTime" class="text-time">0s</h3>
 					</div>
 				</div>
 			</div>
 
 			<div class="card">
-				<div
-					class="card-header bg-dark text-white d-flex justify-content-between align-items-center"
-				>
-					<span>Lịch sử Huấn luyện</span>
-					<span class="badge bg-warning text-dark" id="statusBadge"
-						>Waiting...</span
-					>
+				<div class="card-header text-white" id="tableHeader">
+					<i class="bi bi-table"></i> Chi tiết từng vòng
 				</div>
 				<div class="card-body p-0">
 					<div
 						class="table-responsive"
-						style="max-height: 500px; overflow-y: auto"
+						style="max-height: 600px; overflow-y: auto"
 					>
-						<table class="table table-striped table-hover mb-0 text-center">
-							<thead class="table-dark sticky-top">
+						<table class="table table-hover mb-0 text-center align-middle">
+							<thead class="table-light sticky-top">
 								<tr>
 									<th>Round</th>
-									<th>Accuracy (%)</th>
-									<th>Loss</th>
-									<th>Block Height</th>
+									<th>Global Acc</th>
+									<th>Global Loss</th>
+									<th>Consensus Dist</th>
+									<th>Latency (s)</th>
+									<th class="attack-col d-none">TPR (True Positive)</th>
+									<th class="attack-col d-none">FPR (False Positive)</th>
+									<th>Comm Cost (MB)</th>
 								</tr>
 							</thead>
 							<tbody id="metricsBody"></tbody>
@@ -81,57 +125,354 @@
 			</div>
 		</div>
 
+		<div
+			class="modal fade"
+			id="roundDetailModal"
+			tabindex="-1"
+			aria-hidden="true"
+		>
+			<div class="modal-dialog modal-lg">
+				<div class="modal-content">
+					<div class="modal-header bg-primary text-white">
+						<h5 class="modal-title">
+							Chi tiết Vòng <span id="modalRoundId">#</span>
+						</h5>
+						<button
+							type="button"
+							class="btn-close btn-close-white"
+							data-bs-dismiss="modal"
+							aria-label="Close"
+						></button>
+					</div>
+					<div class="modal-body">
+						<h6 class="border-bottom pb-2 text-primary">
+							<i class="bi bi-person-badge-fill me-2"></i>Vai trò & Ủy ban
+						</h6>
+						<div class="row mb-3">
+							<div class="col-md-4">
+								<div class="card bg-light border-warning mb-2">
+									<div class="card-body text-center p-2">
+										<small class="text-muted d-block">Proposer</small>
+										<strong class="fs-5 text-warning" id="modalProposer"
+											>Node ?</strong
+										>
+									</div>
+								</div>
+							</div>
+							<div class="col-md-8">
+								<div class="card bg-light border-info mb-2">
+									<div class="card-body p-2">
+										<small class="text-muted d-block mb-1"
+											>Committee Members</small
+										>
+										<div id="modalCommittee"></div>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<h6 class="border-bottom pb-2 text-success mt-4">
+							<i class="bi bi-diagram-3-fill me-2"></i>Phân bố Cluster
+						</h6>
+						<div class="row" id="modalClusters"></div>
+
+						<h6 class="border-bottom pb-2 text-dark mt-4">
+							<i class="bi bi-star-fill me-2"></i>Điểm Uy tín (Reputation
+							Scores)
+						</h6>
+						<div
+							class="table-responsive"
+							style="max-height: 200px; overflow-y: auto"
+						>
+							<table
+								class="table table-sm table-striped table-hover text-center"
+							>
+								<thead class="table-light sticky-top">
+									<tr>
+										<th>Node ID</th>
+										<th>Reputation</th>
+										<th>Role Status</th>
+									</tr>
+								</thead>
+								<tbody id="modalReputationBody"></tbody>
+							</table>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button
+							type="button"
+							class="btn btn-secondary"
+							data-bs-dismiss="modal"
+						>
+							Đóng
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 		<script>
+			let globalHistory = null;
 			async function updateDashboard() {
 				try {
-					// 1. Gọi API lấy dữ liệu
+					// 1. Gọi API
 					const response = await fetch("/get_metrics");
 					const data = await response.json();
+					// [QUAN TRỌNG] Dữ liệu lịch sử nằm trong key "history"
+					// Kiểm tra xem data.history có tồn tại không
+					console.log(data);
+					if (
+						!data.history ||
+						!data.history.rounds ||
+						data.history.rounds.length === 0
+					) {
+						document.getElementById("statusBadge").innerText =
+							"Waiting for Data...";
+						document.getElementById("statusBadge").className =
+							"badge bg-warning text-dark";
 
-					// Kiểm tra nếu chưa có dữ liệu
-					if (!data.rounds || data.rounds.length === 0) {
-						document.getElementById("statusBadge").innerText = "No Data";
+						// Reset hiển thị nếu không có dữ liệu
+						document.getElementById("valRound").innerText = "0";
+						document.getElementById("metricsBody").innerHTML = "";
 						return;
 					}
 
-					// 2. Cập nhật Thống kê nhanh (Lấy phần tử cuối cùng)
-					const lastIdx = data.rounds.length - 1;
-					document.getElementById("currentRound").innerText =
-						data.rounds[lastIdx];
-					document.getElementById("currentAcc").innerText =
-						data.accuracy[lastIdx] + "%";
-					document.getElementById("currentLoss").innerText = data.loss[lastIdx];
-					document.getElementById("statusBadge").innerText = "Live Updating";
+					// [FIX CHÍNH] Trỏ vào data.history
+					const hist = data.history;
+					globalHistory = hist;
 
-					// 3. Cập nhật Bảng (Xóa cũ điền mới hoặc chèn thêm)
-					// Ở đây ta xóa đi render lại cho đơn giản
+					// Cập nhật trạng thái
+					document.getElementById("statusBadge").innerText = "Live Monitoring";
+					document.getElementById("statusBadge").className =
+						"badge bg-success animate-pulse";
+
+					// 2. Lấy chỉ số cuối cùng (Latest Index)
+					const lastIdx = hist.rounds.length - 1;
+
+					// Kiểm tra kịch bản tấn công (Attack Scenario)
+					// Kiểm tra trong mảng tpr có giá trị nào khác null không
+					const hasAttackMetrics =
+						hist.tpr && hist.tpr.some((v) => v !== null && v !== undefined);
+
+					const scenarioBadge = document.getElementById("scenarioBadge");
+					const tableHeader = document.getElementById("tableHeader");
+
+					if (hasAttackMetrics) {
+						scenarioBadge.innerText = "ATTACK SCENARIO";
+						scenarioBadge.className = "badge bg-danger fs-6";
+						if (tableHeader)
+							tableHeader.className = "card-header bg-danger text-white";
+						document
+							.querySelectorAll(".attack-col")
+							.forEach((el) => el.classList.remove("d-none"));
+					} else {
+						scenarioBadge.innerText = "BASELINE SCENARIO";
+						scenarioBadge.className = "badge bg-primary fs-6";
+						if (tableHeader)
+							tableHeader.className = "card-header bg-dark text-white";
+						document
+							.querySelectorAll(".attack-col")
+							.forEach((el) => el.classList.add("d-none"));
+					}
+
+					// 3. Hàm helper format số an toàn
+					const fmt = (val, fixed = 4) => {
+						if (val === null || val === undefined) return "-";
+						return Number(val).toFixed(fixed);
+					};
+
+					// 4. Cập nhật Cards trên cùng
+					document.getElementById("valRound").innerText = hist.rounds[lastIdx];
+					document.getElementById("valAcc").innerText =
+						(hist.avg_acc[lastIdx] * 100).toFixed(2) + "%";
+					document.getElementById("valLoss").innerText = "NaN";
+					if (hist.global_loss) {
+						document.getElementById("valLoss").innerText = fmt(
+							hist.global_loss[lastIdx - 1],
+						);
+					}
+					document.getElementById("valDist").innerText = "NaN";
+					if (hist.consensus_distance) {
+						document.getElementById("valDist").innerText = fmt(
+							hist.consensus_distance[lastIdx - 1],
+							2,
+						);
+					}
+					document.getElementById("valTime").innerText = "NaN";
+					if (hist.execution_time) {
+						document.getElementById("valTime").innerText =
+							fmt(hist.execution_time[lastIdx - 1], 2) + "s";
+					}
+					// 5. Render Bảng
 					const tbody = document.getElementById("metricsBody");
 					tbody.innerHTML = "";
-
-					// Duyệt ngược để vòng mới nhất hiện lên trên đầu
+					// Thêm header cho bảng nếu chưa có cột Action
+					const theadRow = document.querySelector("thead tr");
+					if (!theadRow.querySelector(".col-action")) {
+						const th = document.createElement("th");
+						th.className = "col-action";
+						th.innerText = "Chi tiết";
+						theadRow.appendChild(th);
+					}
+					// Duyệt ngược (Mới nhất lên đầu)
 					for (let i = lastIdx; i >= 0; i--) {
+						let attackCells = "";
+						// Nút bấm mở Modal
+						const actionBtn = `
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="showRoundDetails(${i})">
+                                <i class="bi bi-eye"></i> Xem
+                            </button>
+                        </td>
+                    `;
+						if (hasAttackMetrics) {
+							attackCells = `
+                        <td class="text-danger fw-bold">${fmt(hist.tpr ? hist.tpr[i] : null, 2)}</td>
+                        <td class="text-warning fw-bold">${fmt(hist.fpr ? hist.fpr[i] : null, 2)}</td>
+                    `;
+						}
+
+						// comm_cost có thể bị thiếu ở các vòng đầu, cần check
+						const comm =
+							hist.comm_cost && hist.comm_cost[i] !== undefined
+								? fmt(hist.comm_cost[i], 1)
+								: "0";
+						// Kiểm tra global_loss, consensus_distance, execution_time
+						let global_loss = NaN;
+						let consensus_distance = NaN;
+						let execution_time = NaN;
+						if (hist.global_loss) {
+							global_loss = fmt(hist.global_loss[lastIdx - 1]);
+						}
+						if (hist.consensus_distance) {
+							consensus_distance = fmt(hist.consensus_distance[lastIdx - 1]);
+						}
+						if (hist.execution_time) {
+							execution_time = fmt(hist.execution_time[lastIdx - 1]);
+						}
+
 						const row = `
                     <tr>
-                        <td><strong>${data.rounds[i]}</strong></td>
-                        <td><span class="badge bg-success">${data.accuracy[i]}%</span></td>
-                        <td>${data.loss[i]}</td>
-                        <td>#${data.blockchain_height[i]}</td>
+                        <td><strong>#${hist.rounds[i]}</strong></td>
+                        <td><span class="badge bg-success">${(hist.avg_acc[i] * 100).toFixed(2)}%</span></td>
+                        <td>${global_loss}</td>
+                        <td>${consensus_distance}</td>
+                        <td>${execution_time}</td>
+                        ${attackCells}
+                        <td>${comm}</td>
+						${actionBtn}
                     </tr>
                 `;
 						tbody.innerHTML += row;
 					}
 				} catch (error) {
-					console.error("Lỗi kết nối:", error);
-					document.getElementById("statusBadge").innerText = "Connection Error";
-					document.getElementById("statusBadge").className = "badge bg-danger";
+					console.error("Dashboard Error:", error);
+					// Không hiển thị lỗi ngay lên UI để tránh nhấp nháy
 				}
 			}
 
-			// Gọi hàm cập nhật mỗi 2 giây (2000ms)
+			// Chạy ngay lập tức và lặp lại mỗi 2s
+			updateDashboard();
 			setInterval(updateDashboard, 2000);
 
-			// Gọi ngay lần đầu khi tải trang
+			// --- HÀM MỚI: HIỂN THỊ CHI TIẾT VÒNG ---
+			function showRoundDetails(index) {
+				if (!globalHistory) return;
+
+				const h = globalHistory;
+
+				// 1. Set Title
+				document.getElementById("modalRoundId").innerText = h.rounds[index];
+
+				// 2. Set Roles
+				const roles = h.roles
+					? h.roles[index][index - 1]
+					: { proposer: "N/A", committee: [] };
+				document.getElementById("modalProposer").innerText =
+					`Node ${roles.proposer}`;
+
+				const commContainer = document.getElementById("modalCommittee");
+				commContainer.innerHTML = roles.committee
+					.map(
+						(id) =>
+							`<span class="badge bg-info text-dark me-1">Node ${id}</span>`,
+					)
+					.join("");
+
+				// 3. Set Clusters
+				console.log(h.cluster_assignments, "WTF");
+				const clusters = h.cluster_assignments
+					? h.cluster_assignments[index][index - 1]
+					: {};
+				const clusterDiv = document.getElementById("modalClusters");
+				clusterDiv.innerHTML = "";
+
+				// Duyệt qua từng cluster để vẽ card
+				for (const [cid, members] of Object.entries(clusters)) {
+					const memberBadges = members
+						.map((m) => `<span class="badge bg-secondary me-1">${m}</span>`)
+						.join("");
+					const col = `
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100">
+                        <div class="card-header py-1 fw-bold bg-light">Cluster ${cid}</div>
+                        <div class="card-body p-2">
+                            ${memberBadges}
+                        </div>
+                    </div>
+                </div>
+            `;
+					clusterDiv.innerHTML += col;
+				}
+
+				// 4. Set Reputation Table
+				const rep = h.reputation ? h.reputation[index] : {};
+				const repBody = document.getElementById("modalReputationBody");
+				repBody.innerHTML = "";
+
+				// Sắp xếp Node theo ID
+				Object.keys(rep)
+					.sort((a, b) => parseInt(a) - parseInt(b))
+					.forEach((nodeId) => {
+						const score = rep[nodeId];
+						let roleBadge = "";
+
+						// Check role để gắn badge
+						if (nodeId == roles.proposer)
+							roleBadge =
+								'<span class="badge bg-warning text-dark">Proposer</span>';
+						else if (roles.committee.includes(parseInt(nodeId)))
+							roleBadge =
+								'<span class="badge bg-info text-dark">Committee</span>';
+						else
+							roleBadge =
+								'<span class="badge bg-light text-dark border">Worker</span>';
+
+						// Tô màu điểm uy tín
+						let scoreClass = "text-success";
+						if (score < 50) scoreClass = "text-danger fw-bold";
+
+						const row = `
+                <tr>
+                    <td>Node ${nodeId}</td>
+                    <td class="${scoreClass}">${score.toFixed(2)}</td>
+                    <td>${roleBadge}</td>
+                </tr>
+            `;
+						repBody.innerHTML += row;
+					});
+
+				// 5. Mở Modal
+				const modal = new bootstrap.Modal(
+					document.getElementById("roundDetailModal"),
+				);
+				modal.show();
+			}
+
+			// Auto Refresh
 			updateDashboard();
+			setInterval(updateDashboard, 2000);
 		</script>
 	</body>
 </html>

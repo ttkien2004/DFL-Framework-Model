@@ -24,6 +24,7 @@ class Blockchain:
         
         # self._initialize_reputation(all_nodes)
         # self._initialize_faults(all_nodes)
+        self.current_round_k_models = {}
     
     def initialize_reputation(self, all_nodes):
         """Khởi tạo điểm cho các node tham gia"""
@@ -37,6 +38,7 @@ class Blockchain:
             node_id = node.id if hasattr(node, 'id') else node
             self.fault[node_id] = 0
 
+    # Các hàm hỗ trợ lưu và tải k-models
     def _save_model_offchain(self, model_state_dict, cluster_id, model_hash):
         """
         Lưu model xuống đĩa và trả về đường dẫn.
@@ -48,27 +50,55 @@ class Blockchain:
         print(f"[Storage] Model saved to {path}")
         return path
     
+    def load_model_from_path(self, file_path):
+        if not os.path.exists(file_path):
+            print(f"[Storage] File not found: {file_path}")
+            return None
+        try:
+            return torch.load(file_path,map_location=torch.device('cpu'))
+        except Exception as e:
+            print(f"[Storage] Error loading model: {e}")
+            return None
+        
+    def update_global_models_registry(self, cluster_models_map):
+        """
+        Transaction cập nhật danh sách K-model cho vòng mới.
+        Input: {0: "QmHash0...", 1: "QmHash1..."}
+        """
+        self.current_round_k_models = cluster_models_map
+        print(f"[Smart Contract] Registry Updated for Next Round: {cluster_models_map}")
+    
+    def get_latest_k_model_hashes(self):
+        return self.current_round_k_models
+
     def create_genesis_block(self):
         return Block(0, "0", [], time.time())
 
     def get_latest_block(self):
         return self.chain[-1]
-
-    # def propose_update(self, cluster_updates):
-    #     """Bước 6: Cơ chế Đồng thuận (Consensus)"""
-    #     # Giả lập Committee voting
-    #     votes = 0
-    #     for member in self.committee:
-    #         # Logic kiểm tra model trên tập validation của member
-    #         votes += 1 
-
-    #     # Tính tỷ lệ phiếu bầu cần thiết
-    #     required_votes = len(self.committee) * Config.CONSENSUS_THRESHOLD
-        
-    #     if votes > required_votes:
-    #         self.add_block(cluster_updates)
-    #         return True
-    #     return False
+    
+    def get_latest_k_models(self, num_clusters):
+        """
+        Quét ngược Blockchain để tìm model mới nhất cho từng Cluster ID.
+        Trả về dict: {cluster_id: model_state}
+        """
+        latest_models = {}
+        found_clusters = set()
+        for block in reversed(self.chain):
+            if block.index == 0: continue
+            data = block.data
+            cid = data.get('cluster_id')
+            if cid is not None and cid not in found_clusters:
+                path = data.get('storage_uri')
+                if path:
+                    model_state = self.load_model_from_path(path)
+                    if model_state:
+                        latest_models[cid] = model_state
+                        found_clusters.add(cid)
+            if len(found_clusters) == num_clusters:
+                break
+        return latest_models
+    #####################################################
     
     # --- SMART CONTRACT LOGIC ---
     def execute_smart_contract(
@@ -252,3 +282,15 @@ class Blockchain:
             return False
 
         return True
+    
+    # Dùng cho cơ chế VIEW-CHANGE
+    def penalize_node(self, node_id, penalty=1):
+        """
+        Trừng phạt node bằng cách tăng chỉ số fault.
+        """
+        # Đảm bảo node_id tồn tại trong dict
+        if node_id not in self.fault:
+            self.fault[node_id] = 0
+            
+        self.fault[node_id] += Config.PENALTY
+        print(f"[Blockchain] Node {node_id} penalized! Fault count: {self.fault[node_id]}")

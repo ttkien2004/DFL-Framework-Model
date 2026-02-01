@@ -71,5 +71,6 @@ class Config:
     LDP_DELTA = 1e-5
     ACC_THRESHOLD = 30.0   # k
 
-    # Cấu hình của Secret Sharing
+    # Cấu hình của Secret Sharing và VIEW-CHANGE
     T_THRESHOLD = 2
+    VC_MAX_RETRIES = 2

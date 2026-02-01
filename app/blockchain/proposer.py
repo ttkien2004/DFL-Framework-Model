@@ -38,3 +38,47 @@ class Proposer(Validator):
         except Exception as e:
             print(f"[Consensus] Reconstruction Error: {e}")
             return None
+        
+    # Dùng cho cơ chế VIEW-CHANGE
+    def execute_view_change(self, old_committee, active_validators, blockchain, available_workers):
+        """
+        (c) Quy trình Thay thế Ủy ban & (d) Trừng phạt.
+        Input:
+            - old_committee: Danh sách Ủy ban cũ (gặp sự cố).
+            - active_validators: Danh sách những người ĐÃ gửi mảnh (không lỗi).
+            - blockchain: Để ghi nhận fault.
+            - available_workers: Danh sách candidate để chọn người thay thế.
+        Output:
+            - new_committee: Danh sách ủy ban mới.
+        """
+        print("\n[View Change] !!! COMMITTEE FAILURE DETECTED !!! Initiating View Change...")
+
+        # 1. Cơ chế trừng phạt (Identify & Penalize)
+        # Những người trong old_committee nhưng KHÔNG nằm trong active_validators là người lỗi
+        active_ids = {v.id for v in active_validators}
+        faulty_nodes = [node for node in old_committee if node.id not in active_ids]
+
+        for node in faulty_nodes:
+            print(f" -> Identifying faulty node: {node.id} (Timeout/Offline)")
+            blockchain.penalize_node(node.id)
+
+        # 2. Kích hoạt Ủy ban dự phòng
+        new_committee = [v for v in old_committee if v.id in active_ids]
+
+        needed = len(old_committee) - len(new_committee)
+
+        if needed > 0:
+            old_ids = {n.id for n in old_committee}
+            candidates = [
+                w for w in available_workers
+                if w.id not in old_ids and w.id != self.id
+            ]
+            # Sắp xép thep Reputation giảm dần
+            candidates.sort(
+                key=lambda x: blockchain.reputation_scores.get(x.id, 0), 
+                reverse=True
+            )
+            replacements = candidates[:needed]
+            new_committee.extend(replacements)
+            # print(f" -> Replacing {len(faulty_nodes)} nodes with: {[n.id for n in replacements]}")
+        return new_committee
