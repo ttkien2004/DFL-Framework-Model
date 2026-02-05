@@ -18,6 +18,7 @@ class ClusterHead(Proposer):
 
         # Khởi tạo model dựa trên Config
         model_name = config.get('model')
+        # Aggregated model
         self.global_model = get_model(model_name, num_classes=self.num_classes).to(self.device)
         # try:
         #     self.global_model = get_model(Config.MODEL_NAME).to(Config.DEVICE)
@@ -36,15 +37,17 @@ class ClusterHead(Proposer):
         self.pending_models = [] # Bộ nhớ tạm để chứa model worker gửi lên
 
         # Lưu trữ public key của committee
-        self.committee_keys = None
+        self.committee = []
         self.threshold = None
         self.num_committee = None
 
     def set_committee_info(self, committee_config):
         if committee_config is not None:
-            self.committee_keys = committee_config['public_keys'] 
+            if 'committee' not in committee_config:
+                raise ValueError(f"Missing 'committee' in committee_config: {committee_config}")
             self.threshold = committee_config['t']
             self.num_committee = committee_config['n']
+            self.committee = committee_config['committee']
     def reload_model(self, dataset_name):
         if dataset_name == 'gtsrb': num_classes = 43
         else: num_classes = 10
@@ -223,6 +226,32 @@ class ClusterHead(Proposer):
 
         print(f"Cluster {self.cluster_id}: Accepted {len(valid_updates)}/{len(self.pending_models)} updates.")
         return valid_updates
+    
+    # Cluster Head Phân mảnh cập nhật cụm cho từng Ủy ban
+    def distribute_shares_to_committee(self, flat_weights, committee):
+        """
+        Hàm helper: Tạo mảnh và Mã hóa cho một Ủy ban cụ thể.
+        Được dùng trong aggregate() và dùng lại khi View Change.
+        """
+        committee_ids = sorted([n.id for n in committee])
+
+        committee_keys = {n.id: n.get_public_key() for n in committee}
+        # Tạo n mảnh
+        raw_shares = SecretSharingUtils.generate_shares(
+            flat_weights, 
+            n=len(committee_ids), 
+            t=self.threshold
+        )
+        encrypted_packets = {}
+        for i, member_id in enumerate(committee_ids, start=1):
+            share_vector = raw_shares[i]
+            pub_key = committee_keys[member_id]
+
+            encrypted_pkg = SecretSharingUtils.encrypt_share(share_vector, pub_key)
+
+            encrypted_packets[member_id] = encrypted_pkg
+        return encrypted_packets
+
 
     def aggregate(self, round_k):
         """
@@ -244,19 +273,24 @@ class ClusterHead(Proposer):
         
         # Reset bộ nhớ đệm
         self.pending_models = []
+
+        avg_state = None
         
         if not updates:
             print(f"Cluster {self.cluster_id}: All updates rejected or empty.")
             # Trả về model cũ nếu không ai đạt chuẩn
             model_hash = compute_model_hash(self.global_model.state_dict())
             # return self.global_model.state_dict(), model_hash
-            return {
-                "metadata": None,           # Không có dữ liệu mới
-                "encrypted_shares": None,   # Không có mảnh bí mật
-                "model_hash": model_hash
-            }
-        # Tổng hợp FedAvg
-        avg_state = federated_averaging(updates)
+            # return {
+            #     "metadata": None,           # Không có dữ liệu mới
+            #     "encrypted_shares": None,   # Không có mảnh bí mật
+            #     "model_hash": model_hash
+            # }
+            avg_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+        else:
+            # Tổng hợp FedAvg
+            avg_state = federated_averaging(updates)
+        
         self.global_model.load_state_dict(avg_state)
         
         # Tính norm
@@ -266,26 +300,11 @@ class ClusterHead(Proposer):
         ## Phân mảnh bí mật (SHAMIR SECRET SHARING)
         flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
 
-        with open("avg_model.txt", "w", encoding="utf-8") as f:
-            f.write(str(avg_state))
+        # with open("avg_model.txt", "w", encoding="utf-8") as f:
+        #     f.write(str(avg_state))
         # Tạo n mảnh bí mật
         # t: Ngưỡng, n: số thành viên ủy ban
-        raw_shares = SecretSharingUtils.generate_shares(
-            flat_weights, 
-            n=self.num_committee, 
-            t=self.threshold
-        )
-        # Phân phối an toàn thông qua mã hóa từng mảnh
-        encrypted_packets = {}
-        committee_ids = sorted(list(self.committee_keys.keys()))
-
-        for i, member_id in enumerate(committee_ids, start=1):
-            share_vector = raw_shares[i]
-            pub_key = self.committee_keys[member_id]
-
-            encrypted_pkg = SecretSharingUtils.encrypt_share(share_vector, pub_key)
-
-            encrypted_packets[member_id] = encrypted_pkg
+        encrypted_packets = self.distribute_shares_to_committee(flat_weights=flat_weights, committee=self.committee)
 
         self.pending_models = []
         
@@ -294,5 +313,6 @@ class ClusterHead(Proposer):
             "metadata": metadata,
             "encrypted_shares": encrypted_packets,
             "model_hash": model_hash,
-            "model_norm": model_norm
+            "model_norm": model_norm,
+            "flat_weights": flat_weights
         }

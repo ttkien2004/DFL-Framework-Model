@@ -78,6 +78,17 @@ class StandardDFLNode(WorkerNode):
                 self.model.load_state_dict(aggregated_model)
             else:
                 aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
+        elif algo_name == "BALANCE":
+            gamma = self.config("BALANCE_GAMMA", 0.3)
+            lambda_val = self.config.get("BALANCE_LAMBDA",1.0)
+            total_rounds = self.config.get("NUM_ROUNDS", 100)
+            aggregated_model = AggregationAlgorithms.balance(
+                updates=valid_updates,
+                current_round=self.current_round,
+                total_rounds=total_rounds,
+                gamma=gamma,
+                lambda_val=lambda_val
+            )
         else:
             aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
 

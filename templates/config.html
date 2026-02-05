@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="vi">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Cấu hình Hệ thống BCFL</title>
+		<link
+			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+			rel="stylesheet"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css"
+		/>
+		<style>
+			body {
+				background-color: #f4f6f9;
+				padding-top: 30px;
+			}
+			.config-card {
+				box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+				border: none;
+				border-radius: 10px;
+			}
+			.nav-tabs .nav-link {
+				color: #495057;
+				font-weight: 600;
+			}
+			.nav-tabs .nav-link.active {
+				color: #0d6efd;
+				border-top: 3px solid #0d6efd;
+			}
+			.form-section-title {
+				font-size: 0.9rem;
+				text-transform: uppercase;
+				letter-spacing: 1px;
+				color: #6c757d;
+				margin-top: 20px;
+				margin-bottom: 10px;
+				font-weight: 700;
+				border-bottom: 1px solid #dee2e6;
+				padding-bottom: 5px;
+			}
+			.help-text {
+				font-size: 0.8rem;
+				color: #888;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container mb-5">
+			<div class="row justify-content-center">
+				<div class="col-lg-10">
+					<div class="text-center mb-4">
+						<h2 class="fw-bold">BCFL Configuration Center</h2>
+						<p class="text-muted">
+							Thiết lập tham số môi trường huấn luyện Federated Learning
+						</p>
+					</div>
+
+					<div class="card config-card overflow-hidden">
+						<div class="card-header bg-white p-0">
+							<ul class="nav nav-tabs nav-fill" id="configTabs" role="tablist">
+								<li class="nav-item" role="presentation">
+									<button
+										class="nav-link active py-3"
+										id="baseline-tab"
+										data-bs-toggle="tab"
+										data-bs-target="#baseline-pane"
+										type="button"
+										role="tab"
+									>
+										<i class="bi bi-shield-check me-2"></i>Kịch bản 1: Baseline
+										(No Attack)
+									</button>
+								</li>
+								<li class="nav-item" role="presentation">
+									<button
+										class="nav-link py-3 text-danger"
+										id="attack-tab"
+										data-bs-toggle="tab"
+										data-bs-target="#attack-pane"
+										type="button"
+										role="tab"
+									>
+										<i class="bi bi-virus me-2"></i>Kịch bản 2: Adversarial
+										(Attack)
+									</button>
+								</li>
+							</ul>
+						</div>
+
+						<div class="card-body p-4">
+							<div class="tab-content" id="configTabsContent">
+								<div
+									class="tab-pane fade show active"
+									id="baseline-pane"
+									role="tabpanel"
+								>
+									<form id="baselineForm">
+										<input type="hidden" name="scenario" value="1" />
+
+										<div class="form-section-title">
+											1. Chế độ Hệ thống (System Architecture)
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-12">
+												<label class="form-label fw-bold"
+													>System Mode (Cơ chế Đồng thuận)</label
+												>
+												<select class="form-select" name="system_mode">
+													<option value="PROPOSED" selected>
+														✨ Mô hình Đề xuất (CoCo/BCFL - Clustering)
+													</option>
+													<option disabled>
+														────────── DFL Truyền thống ──────────
+													</option>
+													<option value="DFL_FEDAVG">
+														DFL + FedAvg (Cơ bản)
+													</option>
+													<option value="DFL_KRUM">
+														DFL + Krum (Chống Byzantine)
+													</option>
+													<option value="DFL_MEDIAN">
+														DFL + Coordinate Median
+													</option>
+													<option value="DFL_TRIMMED_MEAN">
+														DFL + Trimmed Mean
+													</option>
+												</select>
+												<div class="help-text mt-1">
+													Chọn giữa kiến trúc đề xuất hoặc các giải thuật DFL
+													tiêu chuẩn để so sánh.
+												</div>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											2. Dữ liệu & Mô hình (Data & Model)
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Dataset</label>
+												<select class="form-select" name="dataset">
+													<option value="mnist" selected>
+														MNIST (Chữ viết tay)
+													</option>
+													<option value="fashion_mnist">Fashion MNIST</option>
+													<option value="cifar10">CIFAR-10</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Model Architecture</label>
+												<select class="form-select" name="model">
+													<option value="simple_cnn" selected>
+														Simple CNN (LeNet-5 variant)
+													</option>
+													<option value="mlp">
+														MLP (Multi-layer Perceptron)
+													</option>
+													<option value="resnet18">
+														ResNet-18 (Cho CIFAR)
+													</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											3. Môi trường Federated Learning
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label"
+													>Số lượng Workers (Nodes)</label
+												>
+												<input
+													type="number"
+													class="form-control"
+													name="num_workers"
+													value="10"
+													min="3"
+													max="100"
+												/>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label"
+													>Độ phân tán dữ liệu (Non-IID Alpha)</label
+												>
+												<div class="input-group">
+													<input
+														type="number"
+														class="form-control"
+														name="non_iid_alpha"
+														value="0.5"
+														step="0.1"
+														min="0.1"
+													/>
+													<span class="input-group-text"
+														><i class="bi bi-graph-up"></i
+													></span>
+												</div>
+												<div class="help-text mt-1">
+													Alpha nhỏ (0.1) = Rất Non-IID (Dữ liệu lệch nhiều).
+													Alpha lớn (>10) = IID.
+												</div>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											4. Hyperparameters Huấn luyện
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Batch Size</label>
+												<select class="form-select" name="batch_size">
+													<option value="16">16</option>
+													<option value="32" selected>32</option>
+													<option value="64">64</option>
+													<option value="128">128</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Learning Rate</label>
+												<input
+													type="number"
+													class="form-control"
+													name="learning_rate"
+													value="0.01"
+													step="0.001"
+												/>
+											</div>
+										</div>
+
+										<div
+											class="alert alert-light border d-flex align-items-center mt-4"
+											role="alert"
+										>
+											<div class="form-check form-switch fs-5 me-3">
+												<input
+													class="form-check-input"
+													type="checkbox"
+													id="resetSwitchBaseline"
+													name="reset"
+													checked
+												/>
+											</div>
+											<div>
+												<label
+													class="form-check-label fw-bold text-dark"
+													for="resetSwitchBaseline"
+													>Reset toàn bộ hệ thống</label
+												>
+												<div class="small text-muted">
+													Xóa lịch sử cũ, khởi tạo lại Blockchain và Model từ
+													đầu.
+												</div>
+											</div>
+										</div>
+
+										<div class="d-grid mt-4">
+											<button type="submit" class="btn btn-primary btn-lg">
+												<i class="bi bi-play-circle-fill me-2"></i>Khởi chạy
+												Baseline Simulation
+											</button>
+										</div>
+									</form>
+								</div>
+
+								<div class="tab-pane fade" id="attack-pane" role="tabpanel">
+									<form id="attackForm">
+										<input type="hidden" name="scenario" value="2" />
+
+										<div class="form-section-title text-danger">
+											1. Thiết lập Tấn công (Adversarial Setup)
+										</div>
+
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label fw-bold">System Mode</label>
+												<select
+													class="form-select"
+													id="attackSystemMode"
+													name="system_mode"
+												>
+													<option value="PROPOSED">
+														✨ Mô hình Đề xuất (CoCo/BCFL)
+													</option>
+													<option value="BASELINE">
+														🛡️ DFL Baseline (Truyền thống)
+													</option>
+												</select>
+											</div>
+
+											<div class="col-md-6 d-none" id="aggregationGroup">
+												<label class="form-label"
+													>Aggregation Algorithm (Cơ chế phòng thủ)</label
+												>
+												<select
+													class="form-select"
+													name="aggregation_algorithm"
+												>
+													<option value="FEDAVG">
+														FedAvg (Không phòng thủ)
+													</option>
+													<option value="UBAR" selected>
+														UBAR (Robust Aggregation)
+													</option>
+													<option value="KRUM">Krum</option>
+													<option value="TRIMMED_MEAN">Trimmed Mean</option>
+													<option value="MEDIAN">Coordinate Median</option>
+													<option value="FL_TRUST">FL Trust</option>
+													<option value="BALANCE">BALANCE</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label text-danger fw-bold"
+													>Tỷ lệ Node Tấn công (Malicious Ratio)</label
+												>
+												<div class="input-group">
+													<input
+														type="number"
+														class="form-control border-danger"
+														name="malicious_ratio"
+														value="0.3"
+														step="0.1"
+														min="0.0"
+														max="1.0"
+													/>
+													<span class="input-group-text bg-danger text-white"
+														><i class="bi bi-people-fill"></i
+													></span>
+												</div>
+												<div class="help-text">
+													Ví dụ: 0.3 nghĩa là 30% workers là kẻ tấn công.
+												</div>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label fw-bold"
+													>Loại Tấn công (Attack Type)</label
+												>
+												<select
+													class="form-select border-danger"
+													id="attackTypeSelect"
+													name="attack_type"
+												>
+													<option value="GAUSSIAN_MODEL_POISONING" selected>
+														Gaussian Model Poisoning (Nhiễu)
+													</option>
+													<option value="LABEL_FLIPPING">
+														Label Flipping (Đảo nhãn)
+													</option>
+													<option value="BACKDOOR">Backdoor (Cửa hậu)</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="card bg-light border-danger mb-4">
+											<div class="card-body">
+												<div
+													id="params-GAUSSIAN_MODEL_POISONING"
+													class="attack-params-group"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-clouds-fill me-2"></i>Tham số
+														Gaussian Noise
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Standard Deviation (STD)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="std"
+																value="0.5"
+																step="0.1"
+															/>
+															<div class="help-text">
+																Độ lệch chuẩn của nhiễu cộng vào model.
+															</div>
+														</div>
+													</div>
+												</div>
+
+												<div
+													id="params-LABEL_FLIPPING"
+													class="attack-params-group d-none"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-arrow-repeat me-2"></i>Tham số Label
+														Flipping
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Source Class (Nhãn gốc)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="source_class"
+																value="3"
+																min="0"
+																max="9"
+															/>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Target Class (Nhãn đích)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="target_class_flip"
+																value="5"
+																min="0"
+																max="9"
+															/>
+														</div>
+													</div>
+												</div>
+
+												<div
+													id="params-BACKDOOR"
+													class="attack-params-group d-none"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-door-open-fill me-2"></i>Tham số
+														Backdoor
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Target Class (Nhãn mục tiêu)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="target_class_backdoor"
+																value="5"
+																min="0"
+																max="9"
+															/>
+															<div class="help-text">
+																Model sẽ dự đoán sai thành nhãn này khi gặp
+																Trigger.
+															</div>
+														</div>
+													</div>
+												</div>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											2. Môi trường & Hyperparameters
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-4">
+												<label class="form-label">Dataset</label>
+												<select class="form-select" name="dataset">
+													<option value="mnist" selected>MNIST</option>
+													<option value="cifar10">CIFAR-10</option>
+												</select>
+											</div>
+											<div class="col-md-4">
+												<label class="form-label">Model</label>
+												<select class="form-select" name="model">
+													<option value="simple_cnn" selected>
+														Simple CNN
+													</option>
+													<option value="resnet18">ResNet-18</option>
+												</select>
+											</div>
+											<div class="col-md-4">
+												<label class="form-label">Số Workers</label>
+												<input
+													type="number"
+													class="form-control"
+													name="num_workers"
+													value="20"
+												/>
+											</div>
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Batch Size</label>
+												<select class="form-select" name="batch_size">
+													<option value="32" selected>32</option>
+													<option value="64">64</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Learning Rate</label>
+												<input
+													type="number"
+													class="form-control"
+													name="learning_rate"
+													value="0.01"
+													step="0.001"
+												/>
+											</div>
+										</div>
+
+										<div
+											class="alert alert-light border d-flex align-items-center mt-3"
+										>
+											<div class="form-check form-switch fs-5 me-3">
+												<input
+													class="form-check-input"
+													type="checkbox"
+													id="resetSwitchAttack"
+													name="reset"
+													checked
+												/>
+											</div>
+											<label
+												class="form-check-label fw-bold"
+												for="resetSwitchAttack"
+												>Reset System</label
+											>
+										</div>
+
+										<div class="d-grid mt-4">
+											<button type="submit" class="btn btn-danger btn-lg">
+												<i class="bi bi-radioactive me-2"></i>Khởi chạy Attack
+												Simulation
+											</button>
+										</div>
+									</form>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div
+			id="loadingOverlay"
+			class="position-fixed top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-none d-flex justify-content-center align-items-center"
+			style="z-index: 1050"
+		>
+			<div class="text-center">
+				<div
+					class="spinner-border text-primary"
+					style="width: 3rem; height: 3rem"
+					role="status"
+				></div>
+				<h4 class="mt-3 text-dark">Đang khởi tạo Engine...</h4>
+				<p class="text-muted">Vui lòng đợi giây lát</p>
+			</div>
+		</div>
+
+		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+		<script>
+			// XỬ LÝ SUBMIT CHO BASELINE FORM
+			document
+				.getElementById("baselineForm")
+				.addEventListener("submit", async function (e) {
+					e.preventDefault();
+
+					// 1. Hiển thị Loading
+					document.getElementById("loadingOverlay").classList.remove("d-none");
+
+					// 2. Thu thập dữ liệu Form
+					const formData = new FormData(this);
+
+					// Chuyển đổi dữ liệu sang đúng kiểu (Number, Boolean)
+					const payload = {
+						scenario: formData.get("scenario"), // "1"
+						system_mode: formData.get("system_mode"),
+						dataset: formData.get("dataset"),
+						model: formData.get("model"),
+
+						// Convert sang số
+						num_workers: parseInt(formData.get("num_workers")),
+						non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+						batch_size: parseInt(formData.get("batch_size")),
+						learning_rate: parseFloat(formData.get("learning_rate")),
+
+						// Checkbox trả về "on" nếu checked, cần convert sang boolean true/false
+						reset: document.getElementById("resetSwitchBaseline").checked,
+					};
+
+					console.log("Sending Config:", payload);
+
+					try {
+						// 3. Gửi Request
+						const response = await fetch("/run_round", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(payload),
+						});
+
+						const result = await response.json();
+
+						if (result.status === "success") {
+							// 4. Chuyển hướng Dashboard
+							window.location.href = "/dashboard";
+						} else {
+							alert("Lỗi khởi tạo: " + result.message);
+							document.getElementById("loadingOverlay").classList.add("d-none");
+						}
+					} catch (error) {
+						console.error("Error:", error);
+						alert("Không thể kết nối tới Server");
+						document.getElementById("loadingOverlay").classList.add("d-none");
+					}
+				});
+			// --- LOGIC CHO ATTACK FORM ---
+
+			// 1. Ẩn/Hiện Aggregation Algorithm dựa trên System Mode
+			const attackSystemMode = document.getElementById("attackSystemMode");
+			const aggregationGroup = document.getElementById("aggregationGroup");
+
+			attackSystemMode.addEventListener("change", function () {
+				if (this.value === "BASELINE") {
+					aggregationGroup.classList.remove("d-none");
+				} else {
+					aggregationGroup.classList.add("d-none");
+				}
+			});
+
+			// 2. Ẩn/Hiện Tham số dựa trên Attack Type
+			const attackTypeSelect = document.getElementById("attackTypeSelect");
+			const paramGroups = document.querySelectorAll(".attack-params-group");
+
+			attackTypeSelect.addEventListener("change", function () {
+				const selectedType = this.value;
+
+				// Ẩn tất cả trước
+				paramGroups.forEach((group) => group.classList.add("d-none"));
+
+				// Hiện cái được chọn
+				const targetGroup = document.getElementById(`params-${selectedType}`);
+				if (targetGroup) {
+					targetGroup.classList.remove("d-none");
+				}
+			});
+
+			// 3. Xử lý Submit Attack Form
+			document
+				.getElementById("attackForm")
+				.addEventListener("submit", async function (e) {
+					e.preventDefault();
+					document.getElementById("loadingOverlay").classList.remove("d-none");
+
+					const formData = new FormData(this);
+					const attackType = formData.get("attack_type");
+
+					// Tạo Base Payload
+					const payload = {
+						scenario: "4",
+						system_mode: formData.get("system_mode"),
+						dataset: formData.get("dataset"),
+						model: formData.get("model"),
+						num_workers: parseInt(formData.get("num_workers")),
+						malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+
+						attack_type: attackType,
+						batch_size: parseInt(formData.get("batch_size")),
+						learning_rate: parseFloat(formData.get("learning_rate")),
+						reset: document.getElementById("resetSwitchAttack").checked,
+					};
+
+					// Thêm params riêng cho BASELINE
+					if (payload.system_mode === "BASELINE") {
+						payload.aggregation_algorithm = formData.get(
+							"aggregation_algorithm",
+						);
+					}
+
+					// Thêm params riêng cho từng loại Tấn công
+					if (attackType === "GAUSSIAN_MODEL_POISONING") {
+						payload.std = parseFloat(formData.get("std"));
+					} else if (attackType === "LABEL_FLIPPING") {
+						payload.source_class = parseInt(formData.get("source_class"));
+						// Lưu ý: Trong HTML tôi đặt name khác nhau để tránh conflict, giờ map lại vào key chuẩn json
+						payload.target_class = parseInt(formData.get("target_class_flip"));
+					} else if (attackType === "BACKDOOR") {
+						payload.target_class = parseInt(
+							formData.get("target_class_backdoor"),
+						);
+					}
+
+					console.log("Sending Attack Config:", payload);
+
+					// Gửi Request (Dùng chung endpoint start_simulation)
+					try {
+						const response = await fetch("/run_round", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(payload),
+						});
+
+						const result = await response.json();
+						if (result.status === "success") {
+							window.location.href = "/dashboard";
+						} else {
+							alert("Lỗi khởi tạo: " + result.message);
+							document.getElementById("loadingOverlay").classList.add("d-none");
+						}
+					} catch (error) {
+						console.error("Error:", error);
+						alert("Lỗi kết nối Server");
+						document.getElementById("loadingOverlay").classList.add("d-none");
+					}
+				});
+		</script>
+	</body>
+</html>

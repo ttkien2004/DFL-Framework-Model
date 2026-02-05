@@ -11,9 +11,11 @@ from app.scenarios.scenario_1_baseline import ScenarioExperiment1
 from app.utils.data_loader import get_global_test_loader
 from app.utils.helpers import compute_model_norm
 from app.blockchain.consensus import Blockchain
+from app.core.ipfs import StorageService
 import copy
 from collections import defaultdict
 import math
+import json
 
 class SimulationEngine:
     def __init__(self):
@@ -30,6 +32,14 @@ class SimulationEngine:
         self.test_loader = None
         self.t_threshold = getattr(Config, 'T_THRESHOLD', 2)
         self.consensus_threshold = getattr(Config, 'CONSENSUS_THRESHOLD', 0.66) # 2/3 đồng ý
+        self.storage = StorageService()
+        # Lưu các log lịch sử để hiển thị trên UI
+        self.logs = {
+            "rounds": [],
+            "roles": [],
+            "cluster_assignments": [],
+            "reputation": []
+        }
         
     
     def _init_state(self):
@@ -73,7 +83,7 @@ class SimulationEngine:
         dataset_name = req_data.get('dataset', Config.DATASET_NAME)
         batch_size = req_data.get('batch_size', Config.BATCH_SIZE)
         self.test_loader = get_global_test_loader(dataset_name, batch_size)
-        worker_config = req_data 
+        self.engine_config = req_data
         
         self.workers = []
         print(f"Initializing System in [{self.system_mode}] mode with {num_workers} workers.")
@@ -93,19 +103,18 @@ class SimulationEngine:
             self._setup_static_topology(num_workers)
         else:
             # Chạy bầu cử lần đầu
-            # Khởi tạo blockchain
-            committee_config = {
-                'all_nodes': self.workers,
-
-            }
+            # Khởi tạo blockchain            
             self.blockchain = Blockchain()
 
             # Khởi tạo điểm ban đầu và lỗi cho tất cả nodes
             self.blockchain.initialize_faults(self.workers)
             self.blockchain.initialize_reputation(self.workers)
+            # Khởi tạo k-models
+            self._initialize_global_k_models()
 
             self.proposer_node, self.committee_nodes, self.worker_nodes = self._elect_committee(current_round=0)
-            committee_ids = [n.id for n in self.committee_nodes]
+            
+            print("[Engine] System Initialized. Ready for Round 0.")
 
     def _setup_static_topology(self, num_workers, connectivity=0.5):
         """
@@ -250,11 +259,19 @@ class SimulationEngine:
         
         # Committee sẽ chịu trách nhiệm verify và giải mã (Secret Sharing)
         self.current_committee = committee
+
+        current_roles = {
+            "proposer": self.current_proposer.id if self.current_proposer else None,
+            "committee": [node.id for node in self.current_committee]
+        }
         # Phase 1: Clustering
         clusters = self._phase_clustering(workers_pools=active_workers,round_id=round_id)
-
+        # Thu thập log hiển thị
+        cluster_map = {}
+        for cid, members in clusters.items():
+            cluster_map[cid] = [w.id for w in members]
         # Phase 2: Training & LDP
-        worker_updates_cache = self._phase_training_ldp(clusters)
+        worker_updates_cache, global_train_loss = self._phase_training_ldp(clusters)
 
         # Phase 3: CoCo Optimization
         instruction_maps, all_topologies = self._phase_coco_optimization(clusters, worker_updates_cache)
@@ -263,7 +280,16 @@ class SimulationEngine:
         round_results, real_accuracies = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
 
         # Phase 5: Consensus
-        consensus_log = self._phase_consensus(round_results)
+        consensus_results, consensus_log = self._phase_consensus(round_results)
+        current_round_cluster_models = {}
+        for res in consensus_results:
+            if res.get('status') == 'ACCEPTED':
+                cid = res['cluster_id']
+                model_state = res['model_state_dict'] # Model sau khi tái tạo
+                current_round_cluster_models[cid] = model_state
+        consensus_dist = self._calculate_consensus_distance(self.workers, current_round_cluster_models)
+        # Phase 5.1: Lưu cid mới và update k-models cho vòng sau
+        self._finalize_round_and_prepare_next(consensus_results)
 
         # 3. FINALIZE & RETURN METRICS
         # ----------------------------------------------------------------------
@@ -272,16 +298,40 @@ class SimulationEngine:
         
         print(f"Round {round_id} finished inside Engine in {execution_time:.2f}s")
 
+        self.logs["rounds"].append(round_id)
+        self.logs["roles"].append(current_roles)
+        self.logs["cluster_assignments"].append(cluster_map)
+        self.logs["reputation"].append(self.blockchain.reputation_scores.copy())
         return {
             "execution_time": execution_time,
-            "avg_accuracy": avg_accuracy,
+            "global_loss": global_train_loss,
+            "consensus_distance": consensus_dist,
+            # "avg_accuracy": avg_accuracy,
             # "topology": all_topologies,
+            **self.logs,
             "logs": consensus_log,
             # "scenario": f"Scenario {scenario_id}",
             "reputation": self.blockchain.reputation_scores
         }
 
     # --- CÁC PHƯƠNG THỨC NỘI BỘ (PRIVATE METHODS) CHO TỪNG PHA ---
+    def _initialize_global_k_models(self):
+        print("\n[Engine] Initializing System: Generating random K-Models...")
+        num_clusters = getattr(Config, 'NUM_CLUSTERS', 5)
+        initial_registry = {}
+        for cid in range(num_clusters):
+            # Tạo model
+            from app.models.cnn import get_model
+            temp_model = get_model(self.engine_config.get('model'),num_classes=self.engine_config.get('num_classes', 10))
+            model_state = {k: v.cpu().clone() for k, v in temp_model.state_dict().items()}
+            # Upload lên Storage
+            cid_hash = self.storage.upload_model(model_state=model_state)
+            # Lưu vào dict đăng ký
+            initial_registry[cid] = cid_hash
+            print(f" -> Generated Genesis Model for Cluster {cid} (CID: {cid_hash[:8]})")
+
+            del temp_model
+        self.blockchain.update_global_models_registry(initial_registry)
 
     def _phase_clustering(self, workers_pools, round_id):
         """
@@ -290,25 +340,7 @@ class SimulationEngine:
         print(f"[Phase 1] Clustering (Round {round_id})...")
         
         num_clusters = getattr(Config, 'NUM_CLUSTERS', 5)
-        cluster_models = {} # Dictionary chứa {cluster_id: state_dict}
-
-        # --- BƯỚC 1: CHUẨN BỊ CENTROIDS (TÂM CỤM) ---
-        if round_id == 0:
-            # Round 0: Chưa có Blockchain, lấy model của K worker đầu tiên làm tâm cụm khởi tạo
-            print(" -> Round 0: Initializing random centroids from first K workers.")
-            for i in range(num_clusters):
-                # Copy trọng số để tránh tham chiếu
-                import copy
-                cluster_models[i] = copy.deepcopy(self.workers[i].model.state_dict())
-        else:
-            # Round > 0: Tải centroids từ Blockchain
-            cluster_models = self.blockchain.get_latest_centroids()
-            
-            # Fallback: Nếu Blockchain chưa có đủ (ví dụ lỗi), dùng lại chiến lược Round 0 hoặc giữ nguyên
-            if not cluster_models:
-                print(" -> Warning: No centroids found on Blockchain. Using local random init.")
-                for i in range(num_clusters):
-                    cluster_models[i] = copy.deepcopy(self.workers[i].model.state_dict())
+        cluster_models = {} # Dictionary chứa {cluster_id: state_dict}        
 
         # --- BƯỚC 2: WORKER CHỌN CỤM (JOIN) ---
         # Reset trạng thái cũ
@@ -320,7 +352,7 @@ class SimulationEngine:
             
             # Worker tính loss trên từng centroid và chọn cái tốt nhất
             # Hàm join_cluster sẽ set w.cluster_id
-            w.join_cluster(cluster_models)
+            w.join_cluster_via_blockchain(blockchain=self.blockchain)
             
             # Gom nhóm để bầu chọn Head sau này
             if w.cluster_id in clusters:
@@ -377,21 +409,27 @@ class SimulationEngine:
         active_workers = []
         for cid, members in clusters.items():
             active_workers.extend(members)
-            
+        
+        train_losses = []
         for w in active_workers:
             # Lưu ý: w.model đã được load weights của cụm ở Phase 1 (trong hàm join_cluster)
             
             # 1. Local Training
-            w_new = w.train()
+            result = w.train()
+            w_new = result['weights']
+            w_loss = result.get('loss')
+            if w_loss is not None:
+                train_losses.append(w_loss)
             
             # 2. Local Differential Privacy (Nếu có)
             w_dp = w.apply_ldp(w_new)
             
             # Lưu vào cache để lát nữa Head thu thập
             worker_updates_cache[w.id] = w_dp
-            
+
+        global_train_loss = sum(train_losses) / len(train_losses) if train_losses else 0.0
         print(f" -> Trained {len(worker_updates_cache)} workers.")
-        return worker_updates_cache
+        return worker_updates_cache, global_train_loss
 
     def _phase_coco_optimization(self, clusters, worker_updates_cache):
         print("[Phase 3] CoCo Optimization...")
@@ -481,8 +519,7 @@ class SimulationEngine:
             ch.set_committee_info(committee_config={
                 't': self.t_threshold,
                 'n': len(self.current_committee),
-                "public_keys": {com.id: com.get_public_key() 
-                                for com in self.current_committee}
+                'committee': self.current_committee
             })
             aggregate_res = ch.aggregate(round_k=round_id)
 
@@ -542,110 +579,134 @@ class SimulationEngine:
             
     #     return round_results, real_accuracies
 
-    def _phase_consensus(self, results):
-        print("[Phase 5] Blockchain Consensus...")
-        logs = []
-        proposer = self.current_proposer
-        committee = self.current_committee
-        threshold = self.t_threshold
-        consensus_threshold = self.consensus_threshold
+    # def _phase_consensus(self, results):
+    #     print("[Phase 5] Blockchain Consensus...")
+    #     logs = []
+    #     proposer = self.current_proposer
+    #     committee = self.current_committee
+    #     threshold = self.t_threshold
+    #     consensus_threshold = self.consensus_threshold
         
-        sorted_committee_ids = sorted([v.id for v in committee])
-        id_to_index = {uid: i for i, uid in enumerate(sorted_committee_ids, start=1)}
-        print(f"[Debug] Index Mapping for Reconstruction: {id_to_index}")
-        for res in results:
-            cluster_id = res['cluster_id']
-            encrypted_shares_map = res.get('encrypted_shares')
-            cluster_members = res.get('cluster_members', [])            
+    #     sorted_committee_ids = sorted([v.id for v in committee])
+    #     id_to_index = {uid: i for i, uid in enumerate(sorted_committee_ids, start=1)}
+    #     print(f"[Debug] Index Mapping for Reconstruction: {id_to_index}")
+    #     for res in results:
+    #         cluster_id = res['cluster_id']
+    #         encrypted_shares_map = res.get('encrypted_shares')
+    #         cluster_members = res.get('cluster_members', [])            
 
-            if not encrypted_shares_map:
-                continue            
+    #         if not encrypted_shares_map:
+    #             continue            
 
-            # --- BƯỚC 1: Validator (Committee) giải mã ---
-            decrypted_shares = {}
+    #         # --- BƯỚC 1: Validator (Committee) giải mã ---
+    #         decrypted_shares = {}
             
-            for validator in committee:
-                # Kiểm tra xem có gói tin cho validator này không
-                if validator.id in encrypted_shares_map:
-                    enc_pkg = encrypted_shares_map[validator.id]
+    #         for validator in committee:
+    #             # Kiểm tra xem có gói tin cho validator này không
+    #             if validator.id in encrypted_shares_map:
+    #                 enc_pkg = encrypted_shares_map[validator.id]
                     
-                    # Validator tự dùng key của mình để giải mã
-                    share = validator.decrypt_share(enc_pkg)
+    #                 # Validator tự dùng key của mình để giải mã
+    #                 share = validator.decrypt_share(enc_pkg)
                     
-                    if share is not None:
-                        # decrypted_shares[validator.id] = share
-                        correct_x = id_to_index.get(validator.id)
+    #                 if share is not None:
+    #                     # decrypted_shares[validator.id] = share
+    #                     correct_x = id_to_index.get(validator.id)
                         
-                        if correct_x:
-                            decrypted_shares[correct_x] = share
-                        else:
-                            print(f"Error: Validator {validator.id} not in sorted mapping!")
+    #                     if correct_x:
+    #                         decrypted_shares[correct_x] = share
+    #                     else:
+    #                         print(f"Error: Validator {validator.id} not in sorted mapping!")
             
-            # --- BƯỚC 2: Proposer tái tạo Model ---
-            metadata = res['metadata']
-            reconstructed_model = proposer.reconstruct_model(collected_shares=decrypted_shares, metadata=metadata,threshold=threshold)
+    #         # --- BƯỚC 2: Proposer tái tạo Model ---
+    #         metadata = res['metadata']
+    #         reconstructed_model = proposer.reconstruct_model(collected_shares=decrypted_shares, metadata=metadata,threshold=threshold)
 
-            with open("rec_model.txt", "w", encoding="utf-8") as f:
-                f.write(str(reconstructed_model))
+    #         # with open("rec_model.txt", "w", encoding="utf-8") as f:
+    #         #     f.write(str(reconstructed_model))
                 
-            if reconstructed_model is None:
-                logs.append(f"Cluster {cluster_id}: Consensus Failed (Reconstruction Error)")
-                continue
+    #         if reconstructed_model is None:
+    #             logs.append(f"Cluster {cluster_id}: Consensus Failed (Reconstruction Error)")
+    #             continue
 
-            # --- Verify (Soft Check Norm/Hash) ---
-            proposed_norm = res.get('model_norm')
-            rec_norm = compute_model_norm(reconstructed_model)
+    #         # --- Verify (Soft Check Norm/Hash) ---
+    #         proposed_norm = res.get('model_norm')
+    #         rec_norm = compute_model_norm(reconstructed_model)
             
-            if abs(proposed_norm - rec_norm) > 1e-3:
-                logs.append(f"The difference between two models are too much")
-                continue
+    #         if abs(proposed_norm - rec_norm) > 1e-3:
+    #             logs.append(f"The difference between two models are too much")
+    #             continue
+    #         else:
+    #             logs.append(f"Two models are the same!")
+
+    #         # Bước 3: COmmittee Validation
+    #         votes, scores = self._run_committee_validation(committee=committee, model_state=reconstructed_model,val_loader=self.test_loader)
+
+    #         total_votes = len(votes)
+    #         approved_votes = sum(votes.values())
+    #         is_approved = (approved_votes / total_votes) >= consensus_threshold
+
+    #         # Tính điểm Acc trung bình của cả hội đồng
+    #         final_acc = sum(scores.values()) / total_votes if total_votes > 0 else 0
+    #         print(f" -> Consensus Result: {approved_votes}/{total_votes} votes. Approved? {is_approved}")
+
+    #         # Bước 4: Gọi Smart Contract
+    #         self.blockchain.execute_smart_contract(
+    #             proposer_id=proposer.id,
+    #             cluster_members=cluster_members,
+    #             votes=votes,
+    #             accuracy=final_acc,
+    #             is_good_update=is_approved
+    #         )
+
+    #         if not is_approved:
+    #             logs.append(f"Cluster {cluster_id}: Rejected (Vote Failed {approved_votes}/{total_votes})")
+    #             continue
+
+    #         # Bước 5: Tạo BLOCK mới
+    #         storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
+
+    #         last_block = self.blockchain.chain[-1]
+    #         block_data = {
+    #             "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
+    #             "model_hash": res['model_hash'],
+    #             "storage_uri": storage_path,
+    #             "votes": votes,
+    #             "previous_block": last_block
+    #         }
+            
+    #         new_block = self.blockchain.add_block(
+    #             block_data
+    #         )
+    #         success = self.blockchain.is_valid_new_block(new_block, last_block)
+    #         status = "Accepted" if success else "Rejected (Blockchain Add Error)"
+    #         logs.append(f"Cluster {cluster_id}: {status}")
+
+    #     return logs
+    def _phase_consensus(self, results):
+        """
+        Giai đoạn 5: Đồng thuận Blockchain (Consensus)
+        Bao gồm: Thu thập mảnh, View Change (nếu cần), Bầu cử và Ghi Block.
+        """
+        print("\n[Phase 5] Blockchain Consensus with View Change...")
+        logs = []
+        consensus_data = []
+        
+        # Danh sách worker dự phòng để thay thế nếu cần View Change
+        available_workers = self.workers 
+
+        for res in results:
+            # Gọi hàm xử lý chi tiết cho từng Cluster
+            process_results = self._process_cluster_consensus(res, available_workers)
+            if isinstance(process_results, dict):
+                consensus_data.append(process_results)
+                status = process_results.get('status')
+                cid = process_results.get('cluster_id')
+                logs.append(f"Cluster {cid}: Consensus finished {status}")
             else:
-                logs.append(f"Two models are the same!")
+                logs.append(process_results)
 
-            # Bước 3: COmmittee Validation
-            votes, scores = self._run_committee_validation(committee=committee, model_state=reconstructed_model,val_loader=self.test_loader)
-
-            total_votes = len(votes)
-            approved_votes = sum(votes.values())
-            is_approved = (approved_votes / total_votes) >= consensus_threshold
-
-            # Tính điểm Acc trung bình của cả hội đồng
-            final_acc = sum(scores.values()) / total_votes if total_votes > 0 else 0
-            print(f" -> Consensus Result: {approved_votes}/{total_votes} votes. Approved? {is_approved}")
-
-            # Bước 4: Gọi Smart Contract
-            self.blockchain.execute_smart_contract(
-                proposer_id=proposer.id,
-                cluster_members=cluster_members,
-                votes=votes,
-                accuracy=final_acc,
-                is_good_update=is_approved
-            )
-
-            if not is_approved:
-                logs.append(f"Cluster {cluster_id}: Rejected (Vote Failed {approved_votes}/{total_votes})")
-                continue
-
-            # Bước 5: Tạo BLOCK mới
-            storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
-
-            last_block = self.blockchain.chain[-1]
-            block_data = {
-                "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
-                "model_hash": res['model_hash'],
-                "storage_uri": storage_path,
-                "votes": votes,
-                "previous_block": last_block
-            }
-            
-            new_block = self.blockchain.add_block(
-                block_data
-            )
-            success = self.blockchain.is_valid_new_block(new_block, last_block)
-            status = "Accepted" if success else "Rejected (Blockchain Add Error)"
-            logs.append(f"Cluster {cluster_id}: {status}")
-
-        return logs
+        return consensus_data, logs
     
     def _run_committee_validation(self, committee, model_state, val_loader):
         """
@@ -717,6 +778,7 @@ class SimulationEngine:
         self.specific_metrics = {}
         error_rates = [] # Cần thu thập để tính Max.TER
         accuracies = []  # Cần thu thập để tính Avg Acc
+        is_attack = True
 
         if attack_type == 'LABEL_FLIPPING':
             src = attack_config.get('source_class')
@@ -778,18 +840,19 @@ class SimulationEngine:
             }
         else:
             # Fallback cho trường hợp chạy bình thường (NONE)
+            is_attack = False
             for w in benign_workers:
                 m = w.evaluate_gaussian_metrics(self.test_loader) # Dùng hàm cơ bản
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
 
         # 2. Tính các Metrics chung (Common Metrics)
-        self.common_metrics = self._calculate_common_metrics(benign_workers, error_rates, accuracies)
+        self.common_metrics = self._calculate_common_metrics(benign_workers, error_rates, accuracies, is_attack=is_attack)
 
         # 3. Gộp kết quả (Merge dicts)
         return {**self.specific_metrics, **self.common_metrics}
 
-    def _calculate_common_metrics(self, benign_workers, error_rates, accuracies):
+    def _calculate_common_metrics(self, benign_workers, error_rates, accuracies, is_attack=False):
         """
         Tính toán các chỉ số hệ thống dùng chung cho mọi kịch bản.
         Bao gồm: Max.TER, Consensus Error, TPR/FPR, Comm Cost.
@@ -819,14 +882,18 @@ class SimulationEngine:
         model_size_mb = 1.2 
         comm_cost = len(self.workers) * model_size_mb
 
-        return {
+        response_metrics = {
             "max_ter": max_ter,
             "avg_acc": avg_acc,
-            "consensus_error": consensus_error,
-            "tpr": tpr,
-            "fpr": fpr,
+            "consensus_error": consensus_error,            
             "comm_cost": comm_cost
         }
+        if not is_attack:
+            return response_metrics
+        else:
+            response_metrics["tpr"] = tpr
+            response_metrics["fpr"] = fpr
+            return response_metrics
     def _calculate_detection_rate(self):
         """
         Tính TPR (True Positive Rate) và FPR (False Positive Rate)
@@ -940,3 +1007,246 @@ class SimulationEngine:
         print(f" -> Workers ({len(workers)}): Count only")
 
         return proposer, committee, workers
+    
+    # Các hàm dùng cho _phase_consensus
+    def _process_cluster_consensus(self, res, available_workers):
+        """
+        Xử lý logic thử lại và thay thế ủy ban
+        """
+        cluster_id = res['cluster_id']
+        flat_weights = res.get('flat_weights')
+        metadata = res.get('metadata')
+
+        active_committee = self.current_committee
+        threshold = self.t_threshold
+        consensus_threshold = self.consensus_threshold
+        proposer = self.current_proposer
+        MAX_RETRIES = Config.VC_MAX_RETRIES
+
+        for attempt in range(MAX_RETRIES + 1):
+            print(f"\n--- Consensus Attempt {attempt+1} (Cluster {cluster_id}) ---")
+
+            # Bước 1: Thu thập mảnh giải mã
+            decrypted_shares, responding_validators = self._attempt_decryption(
+                cluster_id, flat_weights, active_committee
+            )
+            # Bước 2: Kiểm tra ngưỡng
+            if len(decrypted_shares) >= threshold:
+                print(f" -> Success! Collected {len(decrypted_shares)}/{threshold} shares.")
+                return self._finalize_consensus_success(
+                    res, decrypted_shares, active_committee
+                )
+            # Bước 3: Xử lý thất bại
+            print(f" -> FAILED! Collected {len(decrypted_shares)} < {threshold}. Initiating View Change.")
+            
+            if attempt < MAX_RETRIES:
+                # Gọi Proposer thực hiện thay thế ủy ban và trừng phạt node lỗi
+                active_committee = proposer.execute_view_change(
+                    old_committee=active_committee,
+                    active_validators=responding_validators,
+                    blockchain=self.blockchain,
+                    available_workers=available_workers
+                )
+                print(f" -> New Committee for Retry: {[n.id for n in active_committee]}")
+            else:
+                print(" -> Max retries reached. Dropping update.")
+                return f"Cluster {cluster_id}: FAILED (View Change Exhausted)"
+        
+        return f"Cluster {cluster_id}: FAILED (Unknown Error)"
+    
+    def _attempt_decryption(self, cluster_id, flat_weights, committee):
+        # Bước 1: Tìm cluster head
+        ch_node = next((w for w in self.workers if w.cluster_id == cluster_id and w.is_head), None)
+        if not ch_node:
+            print(f"Error: No Cluster Head found for Cluster {cluster_id}")
+            return {}, []
+        # Bước 2: Yêu cầu CH phân mảnh và mã hóa cho ủy ban này
+        encrypted_packets = ch_node.distribute_shares_to_committee(flat_weights, committee)
+
+        # Bước 3: Thu thập mảnh
+        decrypted_shares = {}
+        responding_validators = []
+        sorted_ids = sorted([n.id for n in committee])
+        id_to_index = {uid: i for i, uid in enumerate(sorted_ids, start=1)}
+
+        for validator in committee:
+            # Check lỗi (Mô phỏng offline)
+            if self.blockchain.fault.get(validator.id, 0) > 2:
+                print(f" -> Node {validator.id} unresponsive (High Faults).")
+                continue
+            if validator.id in encrypted_packets:
+                share = validator.decrypt_share(encrypted_packets[validator.id])
+                
+                if share is not None:
+                    # Map đúng index toán học
+                    idx = id_to_index.get(validator.id)
+                    if idx:
+                        decrypted_shares[idx] = share
+                        responding_validators.append(validator)
+        
+        return decrypted_shares, responding_validators
+    
+    def _finalize_consensus_success(self, res, decrypted_shares, final_committee):
+        """
+        Xử lý khi đã đủ mảnh: Tái tạo, Vote, Smart Contract, Lưu Block
+        """
+        cluster_id = res['cluster_id']
+        metadata = res['metadata']
+        proposer = self.current_proposer
+        threshold = self.t_threshold
+
+        # Tái tạo Model
+        reconstructed_model = proposer.reconstruct_model(decrypted_shares,metadata, threshold)
+
+        # Dùng cho upload model vào Storage
+        model_state_cpu = {k: v.cpu().clone() for k,v in reconstructed_model.items()}
+        if reconstructed_model is None:
+            return {"status": "FAILED", "cluster_id": cluster_id, "error": "Reconstruction Failed"}
+        # Kiểm tái tạo model giống ban đầu chưa:
+        proposed_norm = res.get('model_norm')
+        rec_norm = compute_model_norm(reconstructed_model)
+        if abs(proposed_norm - rec_norm) > 1e-3:
+            return f"Cluster {cluster_id}: Rejected (Integrity Check Failed)"
+        # Committee validation
+        votes, scores = self._run_committee_validation(
+            committee=final_committee, 
+            model_state=reconstructed_model, 
+            val_loader=self.test_loader
+        )
+        total_votes = len(votes)
+        approved_votes = sum(votes.values())
+        # Ngưỡng đồng thuận (ví dụ 2/3)
+        consensus_threshold = self.consensus_threshold
+        is_approved = (approved_votes / total_votes) >= consensus_threshold if total_votes > 0 else False
+        final_acc = sum(scores.values()) / total_votes if total_votes > 0 else 0
+
+        print(f" -> Consensus Result: {approved_votes}/{total_votes} votes. Approved? {is_approved}")
+
+        # Smart Contract (Thưởng/Phạt)
+        self.blockchain.execute_smart_contract(
+            proposer_id=proposer.id,
+            cluster_members=res.get('cluster_members', []),
+            votes=votes,
+            accuracy=final_acc,
+            is_good_update=is_approved
+        )
+
+        if not is_approved:
+            return f"Cluster {cluster_id}: Rejected by Vote ({approved_votes}/{total_votes})"
+
+        # Bước 5: Tạo BLOCK mới
+        storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
+
+        block_data = {
+            "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
+            "model_hash": res['model_hash'],
+            "storage_uri": storage_path,
+            "votes": votes,
+        }
+        
+        # new_block = self.blockchain.add_block(
+        #     block_data
+        # )
+        
+        # return f"Cluster {cluster_id}: Accepted (Block {new_block.index})"
+        return {
+            "status": "ACCEPTED",
+            "cluster_id": cluster_id,
+            "data": {
+                "accuracy": final_acc,
+                "model_hash": res['model_hash'],
+                "storage_uri": storage_path,
+                "votes": votes
+            },
+            "model_state_dict": model_state_cpu
+        }
+    
+    def _finalize_round_and_prepare_next(self, results):
+        """
+        Cuối vòng: Gom model -> Upload -> Cập nhật Blockchain Registry
+        """
+        print("\n[Engine] Finalizing Round & Updating Hybrid Storage...")
+        new_k_models_cids = {}
+        for res in results:
+            if res.get('status') == 'ACCEPTED':
+                cid_id = res['cluster_id']
+                model_state = res.get('model_state_dict')
+                if model_state:
+                    ipfs_cid = self.storage.upload_model(model_state=model_state)
+                    new_k_models_cids[cid_id] = ipfs_cid # Hash của file
+                    print(f" -> Cluster {cid_id} uploaded to Storage (CID: {ipfs_cid[:4]})")
+        # Xứ lý các cụm bị thiếu -> Giữ nguyên CID cũ
+        current_registry = self.blockchain.get_latest_k_model_hashes()
+        num_clusters = getattr(Config, 'NUM_CLUSTERS',2)
+        for i in range(num_clusters):
+            if i not in new_k_models_cids:
+                if i in current_registry:
+                    # Dùng lại cái cũ
+                    new_k_models_cids[i] = current_registry[i]
+                    print(f" -> Cluster {i} failed updates. Keeping old CID.")
+                else:
+                    # Chưa từng có
+                    from app.models.cnn import get_model
+                    model_name = self.engine_config.get('model')
+                    temp_model = get_model(
+                        model_name=model_name,
+                        num_classes=self.engine_config.get('num_classes', 10)
+                    )
+                    # Lấy state_dict
+                    random_state = {k: v.cpu() for k, v in temp_model.state_dict().items()}
+                    # Upload lên Storage
+                    random_cid = self.storage.upload_model(random_state)
+                    new_k_models_cids[i] = random_cid
+                    print(f" -> Created Random Model for Cluster {i} (CID: {random_cid[:8]})")
+                    del temp_model
+        # Gửi transaction cập nhật Smart Contract
+        self.blockchain.update_global_models_registry(new_k_models_cids)
+
+    # Hàm tính consensus distance để trả về log kết quả
+    def _calculate_consensus_distance(self, workers_list, cluster_models_map):
+        """
+        Tính Consensus Distance trong Clustered FL.
+        Công thức: Avg( || Worker_i - Cluster_Model_of_Worker_i || )
+        """
+        total_distance = 0.0
+        count = 0
+
+        for w in workers_list:
+            # 1. Xác định Worker này thuộc cụm nào
+            cid = w.cluster_id
+            
+            # 2. Lấy model chuẩn của cụm đó
+            # Nếu cụm đó bị lỗi (không có trong map), ta bỏ qua hoặc dùng model cũ
+            if cid not in cluster_models_map:
+                continue
+
+            target_cluster_state = cluster_models_map[cid]
+            worker_state = w.model.state_dict()
+            
+            w_dist = 0.0
+            
+            # 3. Tính khoảng cách Euclide
+            for key in target_cluster_state:
+                if 'weight' in key or 'bias' in key:
+                    w_tensor = worker_state[key].float().cpu()
+                    c_tensor = target_cluster_state[key].float().cpu()
+                    
+                    # || w - c ||^2
+                    diff = torch.norm(w_tensor - c_tensor, p=2).item()
+                    w_dist += diff ** 2
+            
+            # Căn bậc 2 tổng bình phương
+            total_distance += torch.sqrt(torch.tensor(w_dist)).item()
+            count += 1
+            
+        return total_distance / count if count > 0 else 0.0
+    
+    # Dùng để lưu file json cho các kết quả (chưa cần dùng)
+    def save_history_to_file(self):
+        """Ghi đè metrics hiện tại vào file JSON"""
+        try:
+            with open(self.log_file_path, 'w') as f:
+                json.dump(self.history, f, indent=4)
+            # print(" -> Metrics saved to disk.")
+        except Exception as e:
+            print(f"Error saving metrics: {e}")

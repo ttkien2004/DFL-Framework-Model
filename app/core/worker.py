@@ -9,6 +9,7 @@ from app.core.attacks import AttackFactory
 from app.utils.data_loader import get_dataloader, get_dataloader_from_indices
 from app.models.cnn import get_model
 import torch.nn.functional as F
+from app.core.ipfs import StorageService
 # Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
     def __init__(self, node_id, config, device):
@@ -19,6 +20,7 @@ class WorkerNode:
         self.dataset_name = config.get('dataset', 'cifar10')
         self.batch_size = config.get('batch_size', 32)
         self.epochs = config.get('epochs',5)
+        self.epoch_loss = 0.0
         
         # Khởi tạo DataLoader mặc định (IID)
         num_workers = config.get('num_workers', 10)
@@ -48,6 +50,9 @@ class WorkerNode:
         self.neighbors = []         # Danh sách hàng xóm
         self.received_updates = {}  # Bộ đệm chứa model nhận được từ hàng xóm
 
+        # Kết nối tới IPFS để lấy k-model
+        self.storage = StorageService()
+
     def reload_dataset(self, dataset_name):
         self.dataset_name = dataset_name
 
@@ -64,6 +69,36 @@ class WorkerNode:
 
     def set_attack_profile(self, attack_type):
         self.attack_type = AttackFactory.get_strategy(attack_type)
+
+    def fetch_latest_models(self, blockchain):
+        """
+        Hàm chạy đầu vòng mới:
+        1. Gọi Smart Contract lấy Hashes.
+        2. Tải Model từ IPFS.
+        """
+        print(f"[Worker {self.id}] Fetching latest K-Models...")
+        
+        # 1. Gọi Smart Contract (View Function - Miễn phí)
+        cids_map = blockchain.get_latest_k_model_hashes()
+        
+        if not cids_map:
+            print(" -> Registry empty. Waiting for initialization...")
+            return {}
+
+        downloaded_models = {}
+        
+        # 2. Tải dữ liệu từ Storage (Off-chain)
+        for cid_id, ipfs_hash in cids_map.items():
+            # Kiểm tra cache xem đã tải chưa (trong thực tế)
+            model_state = self.storage.download_model(ipfs_hash)
+            
+            if model_state:
+                downloaded_models[cid_id] = model_state
+            else:
+                print(f" -> Failed to download Cluster {cid_id} (Hash: {ipfs_hash})")
+        
+        print(f" -> Successfully fetched {len(downloaded_models)} models.")
+        return downloaded_models
 
     def evaluate_loss_on_model(self, model_state):
         """Bước 1: Tính Loss để chọn cụm, (DFCA)"""
@@ -95,6 +130,21 @@ class WorkerNode:
         self.current_loss = min_loss
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
 
+    def join_cluster_via_blockchain(self, blockchain):
+        # Client tự tải model về
+        cluster_models = self.fetch_latest_models(blockchain=blockchain)
+        if not cluster_models:
+            print("Worker cannot join cluster: No models avalable")
+        # Tính loss và chọn cụm
+        losses = {cid: self.evaluate_loss_on_model(model) for cid, model in cluster_models.items()}
+        best_cid = min(losses, key=losses.get)
+        min_loss = losses[best_cid]
+
+        self.cluster_id = best_cid
+        self.current_loss = min_loss
+        self.model.load_state_dict(cluster_models[best_cid])
+        print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
+
     def train(self):
         """Bước 2: Huấn luyện cục bộ (Local Training)"""
         # self.model.train()
@@ -102,15 +152,25 @@ class WorkerNode:
         self.optimizer = torch.optim.SGD(self.model.parameters(), 
                                    lr=self.config.get('learning_rate', 0.01),
                                    momentum=0.9)
-        if self.attack_strategy:
-            return self.attack_strategy.execute(self)
+        if self.attack_strategy.is_malicious:
+            weights = self.attack_strategy.execute(self)
+            return {
+                "weights": weights,
+                "loss": None,
+            }
         else:
-            return self._standard_train()
+            weights, loss = self._standard_train()
+            return {
+                "weights": weights,
+                "loss": loss
+            }
         # return self.attack_strategy.execute(self)
     
-    def _standard_train(self, flip_labels=False):
+    def _standard_train(self):
         self.model.train()
+        _cal_epoch_loss = 0.0 # Giá trị trung bình của hàm mất mát sau mõi vòng
         for epoch in range(self.epochs):
+            batch_losses = []
             for batch_idx, (data, target) in enumerate(self.data_loader):
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
@@ -118,34 +178,18 @@ class WorkerNode:
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
+                batch_losses.append(loss.item())
+            _cal_epoch_loss = sum(batch_losses) / len(batch_losses) if batch_losses else 0.0
+            # print(f"Worker {self.id} - Epoch {epoch+1}/{self.epochs} - -WTF: {_cal_epoch_loss:.4f}")
         
-        return self.model.state_dict()
+        self.epoch_loss = _cal_epoch_loss
+        return self.model.state_dict(), _cal_epoch_loss
 
-    def apply_ldp(self, params):
-        """
-        Thực hiện LDP-Gauss theo 2 bước: Clipping và Adding Noise.
-        Input: params (state_dict của model sau khi train)
-        Output: noisy_params (state_dict đã được bảo vệ)
-        """
-        if not Config.ENABLE_LDP:
-            return params
-
-        # --- BƯỚC A: CẮT GỌN THAM SỐ (CLIPPING) - Công thức (29) ---
-        
-        # 1. Tính chuẩn L2 toàn cục (Global L2 Norm) của vector trọng số ||w_i||
-        total_norm = 0.0
-        for v in params.values():
-            # Chỉ tính norm trên các tensor kiểu float (bỏ qua int64 như buffer đếm bước)
-            if v.dtype in [torch.float, torch.float32, torch.float64]:
-                param_norm = v.data.norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = math.sqrt(total_norm)
-
-        # 2. Tính hệ số cắt gọn (Clipping Scale)
-        # scale = max(1, ||w_i|| / C)
-        clip_threshold = Config.LDP_CLIPPING_THRESHOLD
-        clip_scale = max(1.0, total_norm / clip_threshold)
-
+    def set_epoch_loss(self, epoch_loss):
+        self.epoch_loss = epoch_loss
+    
+    def get_epoch_loss(self):
+        return self.epoch_loss
         # --- BƯỚC B: CỘNG NHIỄU GAUSS - Công thức (30) ---
         
     # Local update
