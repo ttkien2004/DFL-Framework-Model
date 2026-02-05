@@ -340,3 +340,72 @@ class AggregationAlgorithms:
         # Tính trung bình (Average) các model trong final_selection
         # R_{k,i} = Mean(N^r)
         return AggregationAlgorithms.fed_avg(final_selection)
+    
+    @staticmethod
+    def get_model_norm(state_dict):
+        """Hàm phụ trợ: Tính L2 Norm của toàn bộ trọng số model"""
+        # Gom tất cả các tensor thành 1 vector phẳng để tính norm
+        flattened = torch.cat([p.view(-1).float() for p in state_dict.values()])
+        return torch.norm(flattened).item()
+
+    @staticmethod
+    def baseline_threshold(w_norm, current_round, total_rounds, gamma, lambda_val):
+        """
+        Tính threshold/weight dựa trên công thức BALANCE Baseline của bạn.
+        Formula: Gamma * exp(-Lambda * (t/T)) * ||w_i||
+        """
+        # Tránh chia cho 0
+        T = max(1, total_rounds)
+        Omega = current_round / T
+        
+        # Tính hệ số thời gian: exp(-Lambda * Omega)
+        time_factor = math.exp(-lambda_val * Omega)
+        
+        return gamma * time_factor * w_norm
+
+    @staticmethod
+    def balance(updates, current_round, total_rounds, gamma=1.0, lambda_val=1.0):
+        """
+        Chiến lược BALANCE: Tổng hợp model dựa trên trọng số được tính toán
+        từ Norm và thời gian.
+        
+        Args:
+            updates: List các state_dict từ workers
+            current_round: Vòng hiện tại (t)
+            total_rounds: Tổng số vòng (T)
+            gamma: Hệ số cân bằng (Gamma)
+            lambda_val: Hệ số suy giảm (Lambda)
+        """
+        if not updates:
+            return None
+
+        # 1. Tính toán điểm số (score) cho từng update
+        # Score này sẽ đóng vai trò là 'trọng số' (weight) khi cộng gộp
+        scores = []
+        for w in updates:
+            w_norm = AggregationAlgorithms.get_model_norm(w)
+            score = AggregationAlgorithms.baseline_threshold(
+                w_norm, current_round, total_rounds, gamma, lambda_val
+            )
+            scores.append(score)
+
+        # 2. Chuẩn hóa score để tổng các trọng số bằng 1 (Softmax hoặc Normalize)
+        # Ở đây dùng Normalize đơn giản: weight_i = score_i / sum(scores)
+        total_score = sum(scores)
+        if total_score == 0:
+            weights = [1.0 / len(updates)] * len(updates) # Tránh lỗi chia 0
+        else:
+            weights = [s / total_score for s in scores]
+
+        # 3. Tổng hợp trọng số (Weighted Averaging)
+        # w_global = sum(weight_i * w_i)
+        first_model = updates[0]
+        avg_update = {k: torch.zeros_like(v).float() for k, v in first_model.items()}
+
+        for w, weight in zip(updates, weights):
+            for k in avg_update:
+                avg_update[k] += w[k].float() * weight
+
+        # Chuyển về đúng kiểu dữ liệu gốc (nếu cần, ví dụ float16/double)
+        # Thông thường giữ float32 là ổn
+        return avg_update
