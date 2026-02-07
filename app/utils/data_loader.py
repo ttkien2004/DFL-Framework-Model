@@ -125,4 +125,4 @@ def get_global_test_loader(dataset_name, batch_size=32):
     test_dataset,_,_ = _get_dataset_core(dataset_name, train=False)
     
     # Tạo DataLoader chuẩn
-    return DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    return DataLoader(test_dataset, batch_size=batch_size, shuffle=True)

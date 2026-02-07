@@ -52,6 +52,11 @@ class WorkerNode:
 
         # Kết nối tới IPFS để lấy k-model
         self.storage = StorageService()
+    
+    def reset_state(self):
+        self.update_counts = {} # Reset bộ đếm gossip
+        self.received_updates = {}
+        self.cluster_models_cache = {}
 
     def reload_dataset(self, dataset_name):
         self.dataset_name = dataset_name
@@ -94,6 +99,15 @@ class WorkerNode:
             
             if model_state:
                 downloaded_models[cid_id] = model_state
+                total_norm = 0.0
+                for p in model_state.values():
+                    if p.dtype == torch.float32:
+                        total_norm += p.norm(2).item()
+                
+                print(f" -> Downloaded Model Hash {ipfs_hash[:6]}. Weight Norm: {total_norm:.4f}")
+                
+                if total_norm > 1000:
+                    print(" [CẢNH BÁO] Model này đã bị NỔ (Weights quá lớn)!")
             else:
                 print(f" -> Failed to download Cluster {cid_id} (Hash: {ipfs_hash})")
         
@@ -382,6 +396,15 @@ class WorkerNode:
         """
         Đánh giá chi tiết: Trả về Accuracy, Loss và MSE.
         """
+        for param in self.model.parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
+                return {
+                    "accuracy": 0.0,
+                    "error_rate": 1.0,
+                    "loss": 10000.0, # Giá trị Loss cực lớn tượng trưng
+                    "mse": 1.0       # MSE max (giữa 0 và 1) thường là 1 hoặc 2
+                }
         self.model.eval()
         test_loss = 0
         correct = 0
@@ -479,6 +502,15 @@ class WorkerNode:
         - Clean Accuracy (BA): Độ chính xác trên dữ liệu sạch.
         - Attack Success Rate (ASR): Tỷ lệ dữ liệu có trigger bị nhận diện thành target_class.
         """
+        for param in self.model.parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"[Worker {self.id}] Backdoor Check: Model params NaN/Inf -> Return Worst.")
+                return {
+                    "accuracy": 0.0,
+                    "error_rate": 1.0,
+                    "loss": 10000.0,
+                    "asr": 0.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
+                }
         self.model.eval()
         
         # Metrics cho dữ liệu SẠCH (Main Task)
@@ -555,3 +587,58 @@ class WorkerNode:
     def get_neighbors(self):
         """Trả về danh sách láng giềng"""
         return self.neighbors
+    
+    def evaluate_detailed(self, test_loader):
+        """
+        Hàm đánh giá toàn diện dùng cho Engine tính Robustness Metrics.
+        Input: test_loader (Global Test Set)
+        Output: Dict {accuracy, error_rate, loss, mse}
+        """
+        self.model.eval()
+        test_loss = 0
+        correct = 0
+        total_mse = 0.0
+        total_samples = 0
+        
+        # Dùng reduction='sum' để cộng dồn chính xác theo số sample
+        criterion = torch.nn.CrossEntropyLoss(reduction='sum') 
+        
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                
+                # 1. Forward Pass
+                logits = self.model(data)
+                probs = F.softmax(logits, dim=1) # Chuyển logit sang xác suất [0,1]
+                
+                # 2. Tính Loss (CrossEntropy)
+                loss = criterion(logits, target)
+                test_loss += loss.item()
+                
+                # 3. Tính Accuracy
+                pred = logits.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                
+                # 4. Tính MSE (Mean Squared Error) giữa vector dự đoán và one-hot label
+                # Cần thiết để đánh giá mức độ nhiễu/poisoning
+                target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
+                batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
+                total_mse += batch_mse
+                
+                total_samples += len(data)
+
+        if total_samples == 0:
+            return {"accuracy": 0.0, "error_rate": 0.0, "loss": 0.0, "mse": 0.0}
+
+        # Tính trung bình
+        avg_loss = test_loss / total_samples
+        accuracy = correct / total_samples
+        avg_mse = total_mse / total_samples
+        error_rate = 1.0 - accuracy
+
+        return {
+            "accuracy": accuracy,
+            "error_rate": error_rate,
+            "loss": avg_loss,
+            "mse": avg_mse
+        }

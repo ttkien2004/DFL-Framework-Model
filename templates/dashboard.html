@@ -103,7 +103,9 @@
 			</div>
 
 			<div class="card">
-				<div class="card-header bg-white pb-0">
+				<div
+					class="card-header bg-white pb-0 d-flex justify-content-between align-items-center"
+				>
 					<ul
 						class="nav nav-tabs border-bottom-0"
 						id="monitorTabs"
@@ -136,6 +138,14 @@
 							</button>
 						</li>
 					</ul>
+					<div>
+						<button
+							class="btn btn-sm btn-light text-danger fw-bold"
+							onclick="exportToExcel()"
+						>
+							<i class="bi bi-file-earmark-excel-fill me-1"></i>Xuất Excel
+						</button>
+					</div>
 				</div>
 				<div class="card-body p-0">
 					<div class="tab-content" id="monitorTabsContent">
@@ -276,6 +286,29 @@
 				</div>
 			</div>
 		</div>
+		<div class="row mb-4 d-none" id="attackMetricsRow">
+			<div class="col-12">
+				<div class="card border-danger">
+					<div
+						class="card-header bg-danger text-white d-flex justify-content-between align-items-center"
+					>
+						<h5 class="mb-0">
+							<i class="bi bi-exclamation-triangle-fill me-2"></i>Chỉ số Tấn
+							công (<span id="attackTypeLabel"></span>)
+						</h5>
+						<button
+							class="btn btn-sm btn-light text-danger fw-bold"
+							onclick="exportToExcel()"
+						>
+							<i class="bi bi-file-earmark-excel-fill me-1"></i>Xuất Excel
+						</button>
+					</div>
+					<div class="card-body">
+						<div class="row text-center" id="attackMetricsContainer"></div>
+					</div>
+				</div>
+			</div>
+		</div>
 
 		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
@@ -304,6 +337,7 @@
 
 					const hist = data.history;
 					globalHistory = hist;
+					console.log(globalHistory);
 
 					// Cập nhật trạng thái
 					document.getElementById("statusBadge").innerText = "Live Monitoring";
@@ -311,7 +345,7 @@
 						"badge bg-success animate-pulse";
 
 					const lastIdx = hist.rounds.length - 1;
-
+					updateAttackMetrics(hist, lastIdx);
 					// Xác định Scenario Badge
 					const hasAttackMetrics =
 						hist.tpr && hist.tpr.some((v) => v !== null && v !== undefined);
@@ -462,7 +496,7 @@
 					// Fix cho trường hợp dữ liệu backend của bạn có thể trả về array lồng hoặc object
 					// Code cũ của bạn: h.roles[index][index-1] có vẻ rủi ro, tôi sửa lại an toàn hơn
 					// Giả sử API trả về mảng role tương ứng index
-					roles = h.roles[index];
+					roles = h.roles[index][index];
 				}
 
 				document.getElementById("modalProposer").innerText =
@@ -479,21 +513,24 @@
 				const clusters = h.cluster_assignments
 					? h.cluster_assignments[index]
 					: {};
+
 				const clusterDiv = document.getElementById("modalClusters");
 				clusterDiv.innerHTML = "";
 
 				for (const [cid, members] of Object.entries(clusters)) {
-					const memberBadges = members
-						.map((m) => `<span class="badge bg-secondary me-1">${m}</span>`)
-						.join("");
-					const col = `
+					for (const [cluster_id, mem] of Object.entries(members)) {
+						const memberBadges = mem
+							.map((m) => `<span class="badge bg-secondary me-1">${m}</span>`)
+							.join("");
+						const col = `
                         <div class="col-md-6 mb-3">
                             <div class="card h-100">
-                                <div class="card-header py-1 fw-bold bg-light">Cluster ${cid}</div>
+                                <div class="card-header py-1 fw-bold bg-light">Cluster ${cluster_id}</div>
                                 <div class="card-body p-2">${memberBadges}</div>
                             </div>
                         </div>`;
-					clusterDiv.innerHTML += col;
+						clusterDiv.innerHTML += col;
+					}
 				}
 
 				// Reputation Logic
@@ -529,6 +566,188 @@
 
 			updateDashboard();
 			setInterval(updateDashboard, 2000);
+
+			function updateAttackMetrics(hist, index) {
+				const container = document.getElementById("attackMetricsContainer");
+				const rowDiv = document.getElementById("attackMetricsRow");
+				const labelSpan = document.getElementById("attackTypeLabel");
+
+				// 1. Xác định Attack Type
+				// Ưu tiên lấy từ mảng attack_type nếu có, nếu không đoán dựa trên system_mode hoặc metrics
+				let attackType = "NONE";
+				if (hist.attack_type && hist.attack_type[index]) {
+					attackType = hist.attack_type[index];
+				} else {
+					// Fallback Logic: Đoán dựa trên metrics có dữ liệu
+					if (hist.avg_mse && hist.avg_mse[index] > 0)
+						attackType = "GAUSSIAN_MODEL_POISONING";
+					else if (hist.asr && hist.asr[index] > 0)
+						attackType = "LABEL_FLIPPING";
+					else if (hist.tpr && hist.tpr[index] > 0) attackType = "BACKDOOR";
+				}
+
+				// Nếu vẫn là NONE hoặc BASELINE -> Ẩn
+				if (attackType === "NONE" || attackType === "BASELINE") {
+					rowDiv.classList.add("d-none");
+					return;
+				}
+
+				// Hiển thị
+				rowDiv.classList.remove("d-none");
+				labelSpan.innerText = attackType;
+				container.innerHTML = "";
+
+				let html = "";
+
+				// 2. Render Metrics dựa trên Type
+				// Lưu ý: Dùng hist.key[index] để lấy giá trị
+				console.log(attackType, "???");
+				if (attackType === "LABEL_FLIPPING") {
+					html += createMetricCard(
+						"ASR (Success Rate)",
+						fmtPercent(hist.asr[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Source Recall",
+						fmtPercent(hist.src_recall[index]),
+						"text-warning",
+					);
+					html += createMetricCard(
+						"Target Precision",
+						fmtPercent(hist.tgt_precision[index]),
+						"text-primary",
+					);
+				} else if (
+					["GAUSSIAN", "MODEL_POISONING", "GAUSSIAN_MODEL_POISONING"].includes(
+						attackType,
+					)
+				) {
+					html += createMetricCard(
+						"Avg MSE",
+						fmtVal(hist.avg_mse[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Poisoned Loss",
+						fmtVal(hist.avg_loss[index]),
+						"text-secondary",
+					);
+				} else if (attackType === "BACKDOOR") {
+					html += createMetricCard(
+						"Backdoor ASR",
+						fmtPercent(hist.asr[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Clean Accuracy",
+						fmtPercent(hist.avg_acc[index]),
+						"text-success",
+					);
+				}
+
+				container.innerHTML = html;
+			}
+
+			// Helpers nhỏ cho gọn code
+			const fmtPercent = (val) =>
+				val != null ? (val * 100).toFixed(2) + "%" : "N/A";
+			const fmtVal = (val) => (val != null ? val.toFixed(4) : "N/A");
+
+			function createMetricCard(title, value, colorClass) {
+				return `
+        <div class="col-md-4 mb-2">
+            <div class="p-3 border rounded bg-light h-100 d-flex flex-column justify-content-center">
+                <div class="text-muted small text-uppercase fw-bold mb-1">${title}</div>
+                <div class="h3 mb-0 ${colorClass}">${value}</div>
+            </div>
+        </div>
+    `;
+			}
+			function exportToExcel() {
+				// 1. Kiểm tra dữ liệu
+				if (
+					!globalHistory ||
+					!globalHistory.rounds ||
+					globalHistory.rounds.length === 0
+				) {
+					alert("Chưa có dữ liệu để xuất!");
+					return;
+				}
+
+				const h = globalHistory;
+				const count = h.rounds.length;
+
+				// 2. Chuẩn bị Header
+				// BOM \uFEFF giúp Excel mở file UTF-8 không bị lỗi font
+				let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+
+				// Header cơ bản
+				let headers = [
+					"Round",
+					"Accuracy",
+					"Loss",
+					"Consensus Dist",
+					"Comm Cost",
+					"Latency",
+					"System Mode",
+				];
+
+				// Kiểm tra xem các metrics tấn công có dữ liệu không (để thêm cột tương ứng)
+				// Logic: Kiểm tra mảng tồn tại VÀ có ít nhất 1 giá trị khác 0/null
+				const hasMSE = h.avg_mse && h.avg_mse.some((v) => v != null && v !== 0);
+				const hasASR = h.asr && h.asr.some((v) => v != null && v !== 0);
+				const hasRec =
+					h.src_recall && h.src_recall.some((v) => v != null && v !== 0);
+				const hasPre =
+					h.tgt_precision && h.tgt_precision.some((v) => v != null && v !== 0);
+
+				// Thêm header động
+				if (hasMSE) headers.push("Avg MSE");
+				if (hasASR) headers.push("ASR");
+				if (hasRec) headers.push("Src Recall");
+				if (hasPre) headers.push("Tgt Precision");
+
+				csvContent += headers.join(",") + "\r\n";
+
+				// 3. Duyệt vòng lặp để lấy dữ liệu từng dòng
+				for (let i = 0; i < count; i++) {
+					let row = [];
+
+					// Data cơ bản
+					row.push(h.rounds[i]);
+					row.push(h.avg_acc ? h.avg_acc[i] : "");
+					row.push(h.global_loss ? h.global_loss[i] : ""); // Lưu ý: JSON bạn gửi key là avg_loss, không phải global_loss
+					row.push(h.consensus_distance ? h.consensus_distance[i] : "");
+					row.push(h.comm_cost ? h.comm_cost[i] : "");
+					row.push(h.execution_time ? h.execution_time[i] : "");
+					row.push(h.system_mode ? h.system_mode[i] : "BASELINE");
+
+					// Data tấn công (Phải khớp thứ tự Header)
+					if (hasMSE) row.push(h.avg_mse ? h.avg_mse[i] : "");
+					if (hasASR) row.push(h.asr ? h.asr[i] : "");
+					if (hasRec) row.push(h.src_recall ? h.src_recall[i] : "");
+					if (hasPre) row.push(h.tgt_precision ? h.tgt_precision[i] : "");
+
+					csvContent += row.join(",") + "\r\n";
+				}
+
+				// 4. Tải file
+				const encodedUri = encodeURI(csvContent);
+				const link = document.createElement("a");
+				link.setAttribute("href", encodedUri);
+
+				// Tạo tên file có timestamp
+				const timestamp = new Date()
+					.toISOString()
+					.replace(/[:.]/g, "-")
+					.slice(0, 19);
+				link.setAttribute("download", `bcfl_metrics_${timestamp}.csv`);
+
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			}
 		</script>
 	</body>
 </html>

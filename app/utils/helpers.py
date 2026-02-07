@@ -93,3 +93,16 @@ def compute_model_norm(state_dict):
         total_norm_sq += norm ** 2
         
     return math.sqrt(total_norm_sq)
+
+def sanitize_for_json(data):
+    """
+    Đệ quy duyệt qua dict/list và chuyển NaN/Inf thành null
+    """
+    if isinstance(data, dict):
+        return {k: sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_for_json(v) for v in data]
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None # JSON sẽ hiểu là null
+    return data

@@ -49,9 +49,10 @@ class SecretSharingUtils:
         num_params = secret_vector.shape[0]
         device = secret_vector.device
         
+        secret_64 = secret_vector.to(torch.float64)
         # 1. Tạo các hệ số ngẫu nhiên a1, ..., a(t-1)
         # Kích thước: (num_params, t-1)
-        coeffs = torch.randn(num_params, t - 1, device=device)
+        coeffs = torch.randn(num_params, t - 1, device=device, dtype=torch.float64)
         
         shares = {}
         
@@ -60,16 +61,16 @@ class SecretSharingUtils:
             x = i
             # Tính phần đuôi đa thức: a1*x + a2*x^2 + ...
             # Sử dụng broadcasting để nhân x^power với coeffs
-            x_powers = torch.tensor([x**power for power in range(1, t)], device=device, dtype=torch.float)
+            x_powers = torch.tensor([x**power for power in range(1, t)], device=device, dtype=torch.float64)
             
             # P(x) - secret = sum(ai * x^i)
             poly_tail = torch.matmul(coeffs, x_powers)
             
             # P(x) = secret + poly_tail
-            share_val = secret_vector + poly_tail
+            share_val = secret_64 + poly_tail
             
             # Lưu mảnh thứ i
-            shares[i] = share_val
+            shares[i] = share_val.to(torch.float32)
             
         return shares
 
@@ -111,7 +112,7 @@ class SecretSharingUtils:
         # Lấy t mảnh bất kỳ để tái tạo (theo lý thuyết chỉ cần t mảnh)
         # Chuyển keys (x) và values (y) thành list
         indices = list(shares.keys())[:t]  # x_j
-        y_vectors = [shares[i] for i in indices] # y_j
+        y_vectors = [shares[i].to(torch.float64) for i in indices] # y_j
         
         device = y_vectors[0].device
         secret = torch.zeros_like(y_vectors[0], device=device)
@@ -140,4 +141,4 @@ class SecretSharingUtils:
             # Cộng dồn vào kết quả: secret += y_j * coeff
             secret += y_j * lagrange_coeff
             
-        return secret
+        return secret.to(torch.float32)

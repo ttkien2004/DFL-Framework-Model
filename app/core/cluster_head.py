@@ -210,6 +210,10 @@ class ClusterHead(Proposer):
         for update in self.pending_models:
             # Tính khoảng cách Euclid thực sự
             dist = compute_euclidean_distance(global_state, update)
+            import math
+            if math.isnan(dist) or math.isinf(dist):
+                # Nếu model nổ, khoảng cách coi như cực lớn hoặc 0 tuỳ logic hiển thị
+                dist = 1000.0
             distances.append(dist)
             updates_with_distance.append((dist, update))
 
@@ -233,9 +237,12 @@ class ClusterHead(Proposer):
         Hàm helper: Tạo mảnh và Mã hóa cho một Ủy ban cụ thể.
         Được dùng trong aggregate() và dùng lại khi View Change.
         """
-        committee_ids = sorted([n.id for n in committee])
+        sorted_committee = sorted(committee, key=lambda x: x.id)
+        committee_ids = sorted([n.id for n in sorted_committee])
 
-        committee_keys = {n.id: n.get_public_key() for n in committee}
+        committee_keys = {n.id: n.get_public_key() for n in sorted_committee}
+        print(f"[ClusterHead {self.cluster_id}] Generating shares with t={self.threshold}, n={len(committee_ids)}")
+        print(f"[ClusterHead] Flat Weights Norm: {torch.norm(flat_weights).item():.4f}")
         # Tạo n mảnh
         raw_shares = SecretSharingUtils.generate_shares(
             flat_weights, 

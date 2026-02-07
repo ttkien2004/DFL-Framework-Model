@@ -231,6 +231,29 @@
 											</div>
 										</div>
 
+										<div class="col-md-12 mt-3">
+											<label class="form-label fw-bold text-primary"
+												>Số vòng lặp (Global Rounds)</label
+											>
+											<div class="input-group">
+												<input
+													type="number"
+													class="form-control border-primary"
+													name="target_rounds"
+													id="targetRounds"
+													value="10"
+													min="1"
+													max="100"
+												/>
+												<span class="input-group-text bg-primary text-white"
+													>Rounds</span
+												>
+											</div>
+											<div class="help-text">
+												Hệ thống sẽ tự động chạy liên tiếp số vòng này.
+											</div>
+										</div>
+
 										<div
 											class="alert alert-light border d-flex align-items-center mt-4"
 											role="alert"
@@ -504,6 +527,28 @@
 												/>
 											</div>
 										</div>
+										<div class="col-md-12 mt-3">
+											<label class="form-label fw-bold text-danger"
+												>Số vòng lặp (Global Rounds)</label
+											>
+											<div class="input-group">
+												<input
+													type="number"
+													class="form-control border-danger"
+													id="targetRoundsAttack"
+													value="10"
+													min="1"
+													max="100"
+												/>
+												<span class="input-group-text bg-danger text-white"
+													>Rounds</span
+												>
+											</div>
+											<div class="help-text">
+												Hệ thống sẽ thực hiện tấn công liên tiếp trong số vòng
+												này.
+											</div>
+										</div>
 
 										<div
 											class="alert alert-light border d-flex align-items-center mt-3"
@@ -564,51 +609,70 @@
 					e.preventDefault();
 
 					// 1. Hiển thị Loading
-					document.getElementById("loadingOverlay").classList.remove("d-none");
+					const loadingOverlay = document.getElementById("loadingOverlay");
+					const loadingText = loadingOverlay.querySelector("h4");
+					loadingOverlay.classList.remove("d-none");
 
-					// 2. Thu thập dữ liệu Form
+					// 2. Thu thập dữ liệu cơ bản
 					const formData = new FormData(this);
+					const targetRounds =
+						parseInt(document.getElementById("targetRounds").value) || 1;
 
-					// Chuyển đổi dữ liệu sang đúng kiểu (Number, Boolean)
-					const payload = {
-						scenario: formData.get("scenario"), // "1"
+					// Lấy trạng thái reset ban đầu của người dùng
+					const initialReset = document.getElementById(
+						"resetSwitchBaseline",
+					).checked;
+
+					// Tạo payload gốc
+					const basePayload = {
+						scenario: formData.get("scenario"),
 						system_mode: formData.get("system_mode"),
 						dataset: formData.get("dataset"),
 						model: formData.get("model"),
-
-						// Convert sang số
 						num_workers: parseInt(formData.get("num_workers")),
 						non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
 						batch_size: parseInt(formData.get("batch_size")),
 						learning_rate: parseFloat(formData.get("learning_rate")),
-
-						// Checkbox trả về "on" nếu checked, cần convert sang boolean true/false
-						reset: document.getElementById("resetSwitchBaseline").checked,
 					};
 
-					console.log("Sending Config:", payload);
+					console.log(`Bắt đầu chạy ${targetRounds} vòng...`);
 
 					try {
-						// 3. Gửi Request
-						const response = await fetch("/run_round", {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify(payload),
-						});
+						// --- VÒNG LẶP GỬI REQUEST ---
+						for (let i = 0; i < targetRounds; i++) {
+							// Cập nhật giao diện loading
+							loadingText.innerText = `Đang chạy vòng ${i + 1} / ${targetRounds}...`;
 
-						const result = await response.json();
+							// Logic quan trọng:
+							// - Vòng đầu tiên (i=0): Dùng giá trị reset của người dùng (để xóa cũ nếu cần).
+							// - Các vòng sau (i>0): Bắt buộc reset = false (để nối tiếp lịch sử, không xóa cái vừa train).
+							const currentPayload = {
+								...basePayload,
+								reset: i === 0 ? initialReset : false,
+							};
 
-						if (result.status === "success") {
-							// 4. Chuyển hướng Dashboard
-							window.location.href = "/dashboard";
-						} else {
-							alert("Lỗi khởi tạo: " + result.message);
-							document.getElementById("loadingOverlay").classList.add("d-none");
+							// Gửi request
+							const response = await fetch("/run_round", {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify(currentPayload),
+							});
+
+							const result = await response.json();
+
+							if (result.status !== "success") {
+								throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+							}
+
+							console.log(`Hoàn thành vòng ${i + 1}`);
 						}
+
+						// 3. Sau khi chạy đủ số vòng thì mới chuyển trang
+						window.location.href = "/dashboard";
 					} catch (error) {
 						console.error("Error:", error);
-						alert("Không thể kết nối tới Server");
-						document.getElementById("loadingOverlay").classList.add("d-none");
+						alert("Có lỗi xảy ra: " + error.message);
+						loadingOverlay.classList.add("d-none");
 					}
 				});
 			// --- LOGIC CHO ATTACK FORM ---
@@ -647,67 +711,94 @@
 				.getElementById("attackForm")
 				.addEventListener("submit", async function (e) {
 					e.preventDefault();
-					document.getElementById("loadingOverlay").classList.remove("d-none");
+
+					// 1. Setup Loading UI
+					const loadingOverlay = document.getElementById("loadingOverlay");
+					const loadingText = loadingOverlay.querySelector("h4");
+					loadingOverlay.classList.remove("d-none");
 
 					const formData = new FormData(this);
 					const attackType = formData.get("attack_type");
 
-					// Tạo Base Payload
-					const payload = {
-						scenario: "4",
+					// Lấy số vòng lặp mục tiêu và trạng thái reset ban đầu
+					const targetRounds =
+						parseInt(document.getElementById("targetRoundsAttack").value) || 1;
+					const initialReset =
+						document.getElementById("resetSwitchAttack").checked;
+
+					// Tạo Base Payload (Các tham số cố định)
+					console.log(attackType, "WTF");
+					const basePayload = {
+						scenario: "4", // Hoặc "2" tùy logic backend của bạn
 						system_mode: formData.get("system_mode"),
 						dataset: formData.get("dataset"),
 						model: formData.get("model"),
 						num_workers: parseInt(formData.get("num_workers")),
 						malicious_ratio: parseFloat(formData.get("malicious_ratio")),
-
 						attack_type: attackType,
 						batch_size: parseInt(formData.get("batch_size")),
 						learning_rate: parseFloat(formData.get("learning_rate")),
-						reset: document.getElementById("resetSwitchAttack").checked,
 					};
 
 					// Thêm params riêng cho BASELINE
-					if (payload.system_mode === "BASELINE") {
-						payload.aggregation_algorithm = formData.get(
+					if (basePayload.system_mode === "BASELINE") {
+						basePayload.aggregation_algorithm = formData.get(
 							"aggregation_algorithm",
 						);
 					}
 
 					// Thêm params riêng cho từng loại Tấn công
 					if (attackType === "GAUSSIAN_MODEL_POISONING") {
-						payload.std = parseFloat(formData.get("std"));
+						basePayload.std = parseFloat(formData.get("std"));
 					} else if (attackType === "LABEL_FLIPPING") {
-						payload.source_class = parseInt(formData.get("source_class"));
-						// Lưu ý: Trong HTML tôi đặt name khác nhau để tránh conflict, giờ map lại vào key chuẩn json
-						payload.target_class = parseInt(formData.get("target_class_flip"));
+						basePayload.source_class = parseInt(formData.get("source_class"));
+						basePayload.target_class = parseInt(
+							formData.get("target_class_flip"),
+						);
 					} else if (attackType === "BACKDOOR") {
-						payload.target_class = parseInt(
+						basePayload.target_class = parseInt(
 							formData.get("target_class_backdoor"),
 						);
 					}
 
-					console.log("Sending Attack Config:", payload);
+					console.log(`Bắt đầu chạy tấn công ${targetRounds} vòng...`);
 
-					// Gửi Request (Dùng chung endpoint start_simulation)
 					try {
-						const response = await fetch("/run_round", {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify(payload),
-						});
+						// --- VÒNG LẶP GỬI REQUEST ---
+						for (let i = 0; i < targetRounds; i++) {
+							// Cập nhật text loading
+							loadingText.innerText = `Đang tấn công vòng ${i + 1} / ${targetRounds}...`;
 
-						const result = await response.json();
-						if (result.status === "success") {
-							window.location.href = "/dashboard";
-						} else {
-							alert("Lỗi khởi tạo: " + result.message);
-							document.getElementById("loadingOverlay").classList.add("d-none");
+							// Cập nhật trạng thái Reset: Chỉ reset vòng đầu tiên
+							const currentPayload = {
+								...basePayload,
+								reset: i === 0 ? initialReset : false,
+							};
+
+							// Gửi Request
+							const response = await fetch("/run_round", {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify(currentPayload),
+							});
+
+							const result = await response.json();
+
+							if (result.status !== "success") {
+								throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+							}
+
+							console.log(`Hoàn thành vòng ${i + 1}`);
 						}
+
+						// Chạy xong hết thì chuyển trang
+						window.location.href = "/dashboard";
 					} catch (error) {
 						console.error("Error:", error);
-						alert("Lỗi kết nối Server");
-						document.getElementById("loadingOverlay").classList.add("d-none");
+						alert("Có lỗi xảy ra: " + error.message);
+						loadingOverlay.classList.add("d-none");
+						// Reset text loading về mặc định
+						loadingText.innerText = "Đang khởi tạo Engine...";
 					}
 				});
 		</script>

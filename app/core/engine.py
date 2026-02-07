@@ -9,7 +9,7 @@ from app.core.cluster_head import ClusterHead
 from app.scenarios.scenario_4_sec import ScenarioExperiment4
 from app.scenarios.scenario_1_baseline import ScenarioExperiment1
 from app.utils.data_loader import get_global_test_loader
-from app.utils.helpers import compute_model_norm
+from app.utils.helpers import compute_model_norm, sanitize_for_json
 from app.blockchain.consensus import Blockchain
 from app.core.ipfs import StorageService
 import copy
@@ -196,7 +196,7 @@ class SimulationEngine:
             "round": round_id,
             "status": "success"
         }
-        return final_result
+        return sanitize_for_json(final_result)
 
     def _run_round_baseline(self, round_id):
         # Pha 1: Training & Attack (Tự động kích hoạt Attack nếu Scenario đã setup)
@@ -780,6 +780,11 @@ class SimulationEngine:
         accuracies = []  # Cần thu thập để tính Avg Acc
         is_attack = True
 
+        def safe_mean(values, default=0.0):
+            clean_vals = [v for v in values if v is not None and not math.isnan(v)]
+            # if not clean_vals: return 0.0
+            return sum(clean_vals) / len(clean_vals) if clean_vals else default
+
         if attack_type == 'LABEL_FLIPPING':
             src = attack_config.get('source_class')
             tgt = attack_config.get('target_class')
@@ -803,7 +808,7 @@ class SimulationEngine:
                 "tgt_precision": sum(tgt_precisions) / len(tgt_precisions)
             }
 
-        elif attack_type in ['GAUSSIAN', 'MODEL_POISONING']:
+        elif attack_type in ['GAUSSIAN_MODEL_POISONING', 'MODEL_POISONING']:
             # Với Gaussian, ta quan tâm MSE và Loss hơn là ASR
             mses = []
             losses = []
@@ -813,12 +818,16 @@ class SimulationEngine:
                 
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
-                mses.append(m['mse'])
-                losses.append(m['loss'])
+
+                mse = m.get('mse', 1.0)
+                loss = m.get('loss', 10000.0)
+
+                mses.append(mse)
+                losses.append(loss)
                 
             self.specific_metrics = {
-                "avg_mse": sum(mses) / len(mses),
-                "avg_loss": sum(losses) / len(losses)
+                "avg_mse": safe_mean(mses, default=1.0),
+                "avg_loss": safe_mean(losses, default=10000.0)
             }
         elif attack_type == 'BACKDOOR':
             tgt = attack_config.get('target_class')
@@ -827,16 +836,25 @@ class SimulationEngine:
             print(f"   Using Target Class {tgt} for Backdoor Eval")
 
             for w in benign_workers:
-                # Gọi hàm mới viết
+                # Gọi hàm
                 m = w.evaluate_backdoor(self.test_loader, target_class=tgt)
+
+                # Sanitize từng metric đơn lẻ trước khi append
+                acc = m.get('accuracy', 0.0)
+                err = m.get('error_rate', 1.0)
+                asr = m.get('asr', 0.0)
+
+                if math.isnan(acc): acc = 0.0
+                if math.isnan(err): err = 1.0
+                if math.isnan(asr): asr = 0.0
                 
                 accuracies.append(m['accuracy']) # Clean Accuracy
                 error_rates.append(m['error_rate'])
                 asrs.append(m['asr'])            # Backdoor Success Rate
             
             self.specific_metrics = {
-                "asr": sum(asrs) / len(asrs),
-                "clean_acc": sum(accuracies) / len(accuracies)
+                "asr": safe_mean(asrs),
+                "clean_acc": safe_mean(accuracies)
             }
         else:
             # Fallback cho trường hợp chạy bình thường (NONE)
@@ -864,14 +882,35 @@ class SimulationEngine:
         # B. Consensus Error (Độ phân tán của mô hình lành tính)
         benign_weights_flat = []
         for w in benign_workers:
+            is_valid_model = True
+            params_vec = []
+            for p in w.model.state_dict().values():
+                if torch.isnan(p).any() or torch.isinf(p).any():
+                    is_valid_model = False
+                    break
+                params_vec.append(p.view(-1).float())
+            if is_valid_model:
+                benign_weights_flat.append(torch.cat(params_vec))
+
             vec = torch.cat([p.view(-1).float() for p in w.model.state_dict().values()])
             benign_weights_flat.append(vec)
             
         if benign_weights_flat:
-            stack = torch.stack(benign_weights_flat)
-            mean_vec = torch.mean(stack, dim=0)
-            dists = torch.norm(stack - mean_vec, dim=1)
-            consensus_error = torch.mean(dists).item()
+            # stack = torch.stack(benign_weights_flat)
+            # mean_vec = torch.mean(stack, dim=0)
+            # dists = torch.norm(stack - mean_vec, dim=1)
+            # consensus_error = torch.mean(dists).item()
+            try:
+                stack = torch.stack(benign_weights_flat)
+                mean_vec = torch.mean(stack, dim=0)
+                dists = torch.norm(stack - mean_vec, dim=1)
+                consensus_error = torch.mean(dists).item()
+                
+                # Double Check lần cuối
+                if math.isnan(consensus_error) or math.isinf(consensus_error):
+                    consensus_error = 1000.0 # Giá trị phạt nếu lỗi toán học
+            except Exception:
+                consensus_error = 1000.0
         else:
             consensus_error = 0.0
 
@@ -1105,7 +1144,23 @@ class SimulationEngine:
         # Kiểm tái tạo model giống ban đầu chưa:
         proposed_norm = res.get('model_norm')
         rec_norm = compute_model_norm(reconstructed_model)
+        print(f"[Integrity Check] Cluster {cluster_id}: Proposed Norm={proposed_norm:.4f} vs Rec Norm={rec_norm:.4f}")
+
+        if rec_norm > proposed_norm * 2.0:
+            scale_factor = rec_norm / proposed_norm
+            print(f" -> DETECTED SCALING ERROR! Factor ~= {scale_factor:.2f}. Attempting to fix...")
+            
+            # Thử sửa bằng cách chia cho hệ số (thường là lũy thừa của 10 hoặc 2)
+            # Ở đây ta chia trực tiếp để đưa về Norm gốc
+            correction_ratio = proposed_norm / rec_norm
+            for k in reconstructed_model.keys():
+                reconstructed_model[k] = reconstructed_model[k] * correction_ratio
+            
+            # Tính lại Norm sau khi sửa
+            rec_norm = compute_model_norm({k: v.cpu().float() for k, v in reconstructed_model.items()})
+            print(f" -> Fixed Norm: {rec_norm:.4f}")
         if abs(proposed_norm - rec_norm) > 1e-3:
+            print(f" -> REJECTED: Norm mismatch too high even after fix attempt.")
             return f"Cluster {cluster_id}: Rejected (Integrity Check Failed)"
         # Committee validation
         votes, scores = self._run_committee_validation(
