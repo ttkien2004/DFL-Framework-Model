@@ -109,6 +109,7 @@ class SimulationEngine:
             # Khởi tạo điểm ban đầu và lỗi cho tất cả nodes
             self.blockchain.initialize_faults(self.workers)
             self.blockchain.initialize_reputation(self.workers)
+            self.blockchain.initialize_rewards(self.workers)
             # Khởi tạo k-models
             self._initialize_global_k_models()
 
@@ -295,7 +296,7 @@ class SimulationEngine:
         # ----------------------------------------------------------------------
         execution_time = time.time() - start_time
         avg_accuracy = sum(real_accuracies) / len(real_accuracies) if real_accuracies else 0
-        
+        self._update_node_scores() # Cập nhật điểm số sau mỗi vòng
         print(f"Round {round_id} finished inside Engine in {execution_time:.2f}s")
 
         self.logs["rounds"].append(round_id)
@@ -313,6 +314,27 @@ class SimulationEngine:
             # "scenario": f"Scenario {scenario_id}",
             "reputation": self.blockchain.reputation_scores
         }
+
+    def _update_node_scores(self):
+        all_ids = set(self.blockchain.reputation_scores.keys()) \
+              | set(self.blockchain.reward.keys()) \
+              | set(self.blockchain.fault.keys())
+
+        for nid in all_ids:
+
+            old_rep = self.blockchain.reputation_scores.get(nid, Config.INITIAL_REPUTATION)
+            reward = self.blockchain.reward.get(nid, 0)
+            fault = self.blockchain.fault.get(nid, 0)
+
+            new_rep = old_rep + reward - Config.PENALTY * fault
+
+            self.blockchain.reputation_scores[nid] = new_rep
+            print(f"Node {nid}: rep {old_rep:.2f} → {new_rep:.2f}")
+
+        # reset reward/fault cho round tiếp theo
+        self.blockchain.reward = {nid: 0 for nid in all_ids}
+        self.blockchain.fault = {nid: 0 for nid in all_ids}
+
 
     # --- CÁC PHƯƠNG THỨC NỘI BỘ (PRIVATE METHODS) CHO TỪNG PHA ---
     def _initialize_global_k_models(self):
@@ -522,13 +544,15 @@ class SimulationEngine:
                 'committee': self.current_committee
             })
             aggregate_res = ch.aggregate(round_k=round_id)
+            rejected_workers = aggregate_res.get("rejected_workers", [])
 
             # Giả lập validate accuracy
             # simulated_acc = min(95.0, 15.0 + round_id * 2.5 + random.uniform(-2, 3))
             accuracies.append(0.0)
-            results.append({"cluster_id": ch.cluster_id,"accuracy": 0.0, **aggregate_res})
+            members = clusters[ch.cluster_id]
+            results.append({"cluster_id": ch.cluster_id, "cluster_head_id": ch.id, "cluster_members": [m.id for m in members], "rejected_workers": rejected_workers, "accuracy": 0.0, **aggregate_res})
             
-        return results, accuracies
+        return results, accuracies, 
 
     # def _phase_aggregation(self, clusters, instruction_maps, worker_updates_cache, round_id):
     #     print("[Phase 4] Aggregation & Secret Sharing...")
@@ -1034,7 +1058,7 @@ class SimulationEngine:
 
         # Random chọn trong pool để chốt danh sách
         k = min(len(committee_pool), target_committee_size)
-        committee = random.sample(committee_pool, k)
+        committee = random.sample(committee_pool, k) + [proposer]
 
         # 7. Worker là phần còn lại
         # Gom Proposer và Committee thành set để loại trừ
@@ -1133,6 +1157,8 @@ class SimulationEngine:
         metadata = res['metadata']
         proposer = self.current_proposer
         threshold = self.t_threshold
+        cluster_head_id = res["cluster_head_id"]
+
 
         # Tái tạo Model
         reconstructed_model = proposer.reconstruct_model(decrypted_shares,metadata, threshold)
@@ -1180,7 +1206,9 @@ class SimulationEngine:
         # Smart Contract (Thưởng/Phạt)
         self.blockchain.execute_smart_contract(
             proposer_id=proposer.id,
+            cluster_head_id=cluster_head_id,
             cluster_members=res.get('cluster_members', []),
+            rejected_workers=res.get('rejected_workers', []),
             votes=votes,
             accuracy=final_acc,
             is_good_update=is_approved

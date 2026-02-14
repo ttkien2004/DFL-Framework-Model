@@ -44,7 +44,7 @@ class Config:
     MIN_REQ_REPUTATION = 20.0  # Điểm tối thiểu để được tham gia mạng (nếu thấp hơn sẽ bị ban)
     
     # Cơ chế thưởng phạt
-    REWARD_SUCCESSFUL_BLOCK = 5.0    # Thưởng cho CH nếu Block được duyệt
+    REWARD_SUCCESSFUL_BLOCK = 0.05    # Thưởng cho CH nếu Block được duyệt
     REWARD_COMMITTEE_VOTE = 1.0      # Thưởng cho thành viên Ủy ban vì đã bỏ phiếu
     PENALTY_REJECTED_BLOCK = -10.0   # Phạt nặng CH nếu gửi model rác
     PENALTY_MALICIOUS = -20.0        # Phạt nếu phát hiện tấn công

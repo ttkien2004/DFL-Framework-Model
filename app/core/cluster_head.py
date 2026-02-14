@@ -9,6 +9,8 @@ from app.core.worker import WorkerNode
 from app.blockchain.proposer import Proposer
 from app.models.cnn import get_model
 from app.utils.secret_sharing import SecretSharingUtils
+# from app.blockchain.consensus import Blockchain
+
 # Class này xử lý CoCo lọc BALANCE và tổng hợp
 class ClusterHead(Proposer):
     def __init__(self, cluster_id, config, device, committee_info=None):
@@ -40,6 +42,8 @@ class ClusterHead(Proposer):
         self.committee = []
         self.threshold = None
         self.num_committee = None
+
+        self.rejected_workers = [] # Lưu trữ ID của các worker bị từ chối ở bước BALANCE
 
     def set_committee_info(self, committee_config):
         if committee_config is not None:
@@ -182,7 +186,7 @@ class ClusterHead(Proposer):
             
             # Lưu vào danh sách chờ
             # (Bạn có thể lưu thêm worker_id nếu muốn log chi tiết ai bị loại ở bước BALANCE)
-            self.pending_models.append(formatted_params)
+            self.pending_models.append((worker_id, formatted_params))
             
             # Log (có thể comment lại nếu spam terminal quá nhiều)
             # print(f"[CH {self.cluster_id}] Received update from Worker {worker_id}")
@@ -207,7 +211,7 @@ class ClusterHead(Proposer):
         updates_with_distance = []
         distances = []
 
-        for update in self.pending_models:
+        for worker_id, update in self.pending_models:
             # Tính khoảng cách Euclid thực sự
             dist = compute_euclidean_distance(global_state, update)
             import math
@@ -215,19 +219,22 @@ class ClusterHead(Proposer):
                 # Nếu model nổ, khoảng cách coi như cực lớn hoặc 0 tuỳ logic hiển thị
                 dist = 1000.0
             distances.append(dist)
-            updates_with_distance.append((dist, update))
+            updates_with_distance.append((worker_id, dist, update))
 
         # 3. Tính ngưỡng thích nghi (Adaptive Threshold)
         threshold = Balance.calculate_adaptive_threshold(global_norm, distances, round_k)
 
         # 4. Lọc bỏ các model vượt quá ngưỡng
+        rejected = []
         valid_updates = []
-        for dist, update in updates_with_distance:
+        for worker_id, dist, update in updates_with_distance:
             if dist <= threshold:
                 valid_updates.append(update)
             else:
+                rejected.append(worker_id)
                 print(f"[Refuse] Update rejected! Dist ({dist:.4f}) > Threshold ({threshold:.4f})")
 
+        self.rejected_workers = rejected
         print(f"Cluster {self.cluster_id}: Accepted {len(valid_updates)}/{len(self.pending_models)} updates.")
         return valid_updates
     
@@ -321,5 +328,6 @@ class ClusterHead(Proposer):
             "encrypted_shares": encrypted_packets,
             "model_hash": model_hash,
             "model_norm": model_norm,
-            "flat_weights": flat_weights
+            "flat_weights": flat_weights,
+            "rejected_workers": self.rejected_workers
         }
