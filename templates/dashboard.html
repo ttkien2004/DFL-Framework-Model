@@ -686,6 +686,7 @@
 				// A. XỬ LÝ TÊN FILE
 				// ---------------------------------------------------------
 				const urlParams = new URLSearchParams(window.location.search);
+				console.log(urlParams, "URL Params");
 				const numNodes = urlParams.get("nodes") || "unknown";
 				const plannedRounds = urlParams.get("rounds") || count;
 
@@ -722,9 +723,9 @@
 				let fileName = "";
 
 				if (isAttackScenario) {
-					fileName = `bcfl_metrics_${timestamp}_${attackName}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+					fileName = `bcfl_metrics_${timestamp}_${attackName}_${plannedRounds}rounds_${algoName}_${numNodes}.csv`;
 				} else {
-					fileName = `bcfl_metrics_${timestamp}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+					fileName = `bcfl_metrics_${timestamp}_${plannedRounds}rounds_${algoName}_${numNodes}.csv`;
 				}
 
 				// ---------------------------------------------------------

@@ -949,7 +949,18 @@
 						}
 
 						// Chạy xong hết thì chuyển trang
-						window.location.href = "/dashboard";
+						const numNodes = basePayload.num_workers;
+						const roundsInputId =
+							this.id === "baselineForm"
+								? "targetRounds"
+								: "targetRoundsAttack";
+						const numRounds = document.getElementById(roundsInputId).value;
+						const queryParams = new URLSearchParams({
+							nodes: numNodes,
+							rounds: numRounds,
+							// Các thông tin khác như 'algo', 'attack' ta sẽ lấy trực tiếp từ dữ liệu trả về (globalHistory) để chính xác hơn
+						});
+						window.location.href = `/dashboard?${queryParams.toString()}`;
 					} catch (error) {
 						console.error("Error:", error);
 						alert("Có lỗi xảy ra: " + error.message);
