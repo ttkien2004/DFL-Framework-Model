@@ -21,6 +21,7 @@ class Blockchain:
         self.fault = {}
         self.reward = {}
         self.storage_dir = storage_dir
+        os.makedirs(storage_dir, exist_ok=True)
         # all_nodes = committee_config.get('workers', [])
         
         # self._initialize_reputation(all_nodes)
