@@ -5,7 +5,7 @@ import os
 class Config:
     # --- 1. Cấu hình Hệ thống & Docker ---
     HOST = '0.0.0.0'
-    PORT = 8000
+    PORT = 5000
     DEBUG = True
     
     # Tự động chọn GPU nếu có
@@ -65,10 +65,13 @@ class Config:
     # LDP Config
     # Local Differential Privacy (LDP)
     ENABLE_LDP = False        # Bật/Tắt LDP
-    LDP_EPSILON = 0.5        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
-    LDP_CLIPPING_THRESHOLD = 1.5
-    LDP_SIGMA = 0.5 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
+    LDP_EPSILON = 5.0        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
+    LDP_CLIPPING_THRESHOLD = 0.1
+    LDP_SIGMA = 5.0 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
     LDP_DELTA = 1e-5
+    WEIGHT_DECAY = 1e-4
+
+    # Ngưỡng đánh giá của Ủy ban
     ACC_THRESHOLD = 30.0   # k
 
     # Cấu hình của Secret Sharing và VIEW-CHANGE

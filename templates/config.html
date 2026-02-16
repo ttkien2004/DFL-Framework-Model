@@ -104,34 +104,36 @@
 											1. Chế độ Hệ thống (System Architecture)
 										</div>
 										<div class="row mb-3">
-											<div class="col-md-12">
+											<div class="col-md-6">
 												<label class="form-label fw-bold"
 													>System Mode (Cơ chế Đồng thuận)</label
 												>
-												<select class="form-select" name="system_mode">
+												<select
+													class="form-select"
+													id="baselineSystemMode"
+													name="system_mode"
+												>
 													<option value="PROPOSED" selected>
 														✨ Mô hình Đề xuất (CoCo/BCFL - Clustering)
 													</option>
-													<option disabled>
-														────────── DFL Truyền thống ──────────
-													</option>
-													<option value="DFL_FEDAVG">
-														DFL + FedAvg (Cơ bản)
-													</option>
-													<option value="DFL_KRUM">
-														DFL + Krum (Chống Byzantine)
-													</option>
-													<option value="DFL_MEDIAN">
-														DFL + Coordinate Median
-													</option>
-													<option value="DFL_TRIMMED_MEAN">
-														DFL + Trimmed Mean
+													<option value="BASELINE">
+														🛡️ DFL Truyền thống (Baseline)
 													</option>
 												</select>
+
 												<div class="help-text mt-1">
 													Chọn giữa kiến trúc đề xuất hoặc các giải thuật DFL
 													tiêu chuẩn để so sánh.
 												</div>
+											</div>
+											<div class="col-md-6 d-none" id="baselineAlgorithmGroup">
+												<label class="form-label"> Baseline Algorithm </label>
+												<select class="form-select" name="baseline_algorithm">
+													<option value="FED_AVG">FedAvg (Cơ bản)</option>
+													<option value="CoCo">
+														CoCo (Compression Consensus - Baseline)
+													</option>
+												</select>
 											</div>
 										</div>
 
@@ -280,10 +282,21 @@
 											</div>
 										</div>
 
-										<div class="d-grid mt-4">
-											<button type="submit" class="btn btn-primary btn-lg">
-												<i class="bi bi-play-circle-fill me-2"></i>Khởi chạy
-												Baseline Simulation
+										<div class="d-flex gap-3 mt-4">
+											<button
+												type="submit"
+												class="btn btn-warning flex-fill py-2 disabled"
+											>
+												<i class="bi bi-play-circle-fill me-2"></i>
+												Chạy Kịch Bản (Run All)
+											</button>
+
+											<button
+												type="submit"
+												class="btn btn-primary flex-fill py-2"
+											>
+												<i class="bi bi-play-circle-fill me-2"></i>
+												Khởi chạy Baseline Simulation
 											</button>
 										</div>
 									</form>
@@ -376,6 +389,12 @@
 														Label Flipping (Đảo nhãn)
 													</option>
 													<option value="BACKDOOR">Backdoor (Cửa hậu)</option>
+													<option value="MIA">
+														Membership Inversion (Truy vết thành viên)
+													</option>
+													<option value="GIA">
+														Gradient Inversion (Nghe lén Gradient)
+													</option>
 												</select>
 											</div>
 										</div>
@@ -475,6 +494,92 @@
 														</div>
 													</div>
 												</div>
+												<div
+													id="params-GIA"
+													class="d-none card p-3 mb-3 bg-light border-warning attack-params-group"
+												>
+													<h6 class="text-warning fw-bold">
+														<i class="bi bi-eye"></i> Tham số Gradient Inversion
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Số vòng lặp tối ưu (Iterations)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="gia_iterations"
+																value="300"
+																min="100"
+																max="5000"
+															/>
+															<div class="form-text">
+																Số bước L-BFGS để tái tạo ảnh (càng cao ảnh càng
+																rõ nhưng chậm).
+															</div>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Reconstruction Learning Rate</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="gia_lr"
+																value="1.0"
+																step="0.1"
+															/>
+															<div class="form-text">
+																Tốc độ học của thuật toán tái tạo.
+															</div>
+														</div>
+													</div>
+												</div>
+												<div
+													id="params-MIA"
+													class="card p-3 mb-3 d-none bg-light border-info attack-params-group"
+												>
+													<h6 class="text-info fw-bold">
+														<i class="bi bi-person-bounding-box"></i> Tham số
+														Membership Inference
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Kích thước tập Shadow (Subset Size)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="mia_subset_size"
+																value="1000"
+																min="100"
+																step="100"
+															/>
+															<div class="form-text">
+																Số lượng mẫu (Member/Non-member) dùng để đánh
+																giá tấn công.
+															</div>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Ngưỡng quyết định (Tau)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="mia_tau"
+																step="0.0001"
+																placeholder="Để trống = Tự động (Optimal ROC)"
+															/>
+															<div class="form-text">
+																Nếu để trống, hệ thống sẽ tự tìm ngưỡng Tau tối
+																ưu dựa trên ROC Curve.
+															</div>
+														</div>
+													</div>
+												</div>
 											</div>
 										</div>
 
@@ -569,8 +674,18 @@
 											>
 										</div>
 
-										<div class="d-grid mt-4">
-											<button type="submit" class="btn btn-danger btn-lg">
+										<div class="d-flex gap-3 mt-4">
+											<button
+												type="submit"
+												class="btn btn-warning flex-fill py-2 disabled"
+											>
+												<i class="bi bi-play-circle-fill"></i> Chạy Kịch Bản
+												(Run All)
+											</button>
+											<button
+												type="submit"
+												class="btn btn-danger flex-fill py-2"
+											>
 												<i class="bi bi-radioactive me-2"></i>Khởi chạy Attack
 												Simulation
 											</button>
@@ -603,6 +718,20 @@
 		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 		<script>
 			// XỬ LÝ SUBMIT CHO BASELINE FORM
+			let allResults = {};
+			let taskQueue = [];
+			let isRunningBatch = false;
+			document
+				.getElementById("baselineSystemMode")
+				.addEventListener("change", function () {
+					const group = document.getElementById("baselineAlgorithmGroup");
+
+					if (this.value === "BASELINE") {
+						group.classList.remove("d-none");
+					} else {
+						group.classList.add("d-none");
+					}
+				});
 			document
 				.getElementById("baselineForm")
 				.addEventListener("submit", async function (e) {
@@ -668,7 +797,19 @@
 						}
 
 						// 3. Sau khi chạy đủ số vòng thì mới chuyển trang
-						window.location.href = "/dashboard";
+						const numNodes = basePayload.num_workers;
+						const roundsInputId =
+							this.id === "baselineForm"
+								? "targetRounds"
+								: "targetRoundsAttack";
+						const numRounds = document.getElementById(roundsInputId).value;
+
+						const queryParams = new URLSearchParams({
+							nodes: numNodes,
+							rounds: numRounds,
+							// Các thông tin khác như 'algo', 'attack' ta sẽ lấy trực tiếp từ dữ liệu trả về (globalHistory) để chính xác hơn
+						});
+						window.location.href = `/dashboard?${queryParams.toString()}`;
 					} catch (error) {
 						console.error("Error:", error);
 						alert("Có lỗi xảy ra: " + error.message);
@@ -727,7 +868,6 @@
 						document.getElementById("resetSwitchAttack").checked;
 
 					// Tạo Base Payload (Các tham số cố định)
-					console.log(attackType, "WTF");
 					const basePayload = {
 						scenario: "4", // Hoặc "2" tùy logic backend của bạn
 						system_mode: formData.get("system_mode"),
@@ -759,6 +899,23 @@
 						basePayload.target_class = parseInt(
 							formData.get("target_class_backdoor"),
 						);
+					} else if (attackType == "GIA") {
+						basePayload.gia_iterations = parseInt(
+							formData.get("gia_iterations"),
+						);
+						basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+					} else if (attackType == "MIA") {
+						// 1. Lấy subset size
+						basePayload.mia_subset_size =
+							parseInt(formData.get("mia_subset_size")) || 1000;
+
+						// 2. Lấy Tau (xử lý trường hợp để trống)
+						const tauInput = formData.get("mia_tau");
+						if (tauInput && tauInput.trim() !== "") {
+							basePayload.tau = parseFloat(tauInput);
+						} else {
+							basePayload.tau = null; // Backend sẽ tự tính toán
+						}
 					}
 
 					console.log(`Bắt đầu chạy tấn công ${targetRounds} vòng...`);
@@ -801,6 +958,180 @@
 						loadingText.innerText = "Đang khởi tạo Engine...";
 					}
 				});
+			// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			// async function handleRunAll(event, mode) {
+			// 	event.preventDefault();
+			// 	const form = event.target;
+			// 	const formData = new FormData(form);
+
+			// 	// 1. Lấy danh sách thuật toán được chọn
+			// 	const checkboxes = form.querySelectorAll(".algo-checkbox:checked");
+			// 	if (checkboxes.length === 0) {
+			// 		alert("Vui lòng chọn ít nhất 1 thuật toán!");
+			// 		return;
+			// 	}
+
+			// 	// 2. Lấy tham số chung
+			// 	let rounds = 0;
+			// 	let basePayload = {};
+
+			// 	if (mode === "BASELINE") {
+			// 		rounds = parseInt(formData.get("rounds"));
+			// 		basePayload = {
+			// 			scenario: formData.get("scenario"),
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+			// 	} else {
+			// 		// Mode ATTACK
+			// 		rounds = parseInt(formData.get("rounds_attack"));
+			// 		basePayload = {
+			// 			scenario: "4", // Hoặc "2" tùy logic backend của bạn
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+			// 			attack_type: attackType,
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+			// 		// Logic lấy param nâng cao (MIA, GIA...)
+			// 		const atype = basePayload.attack_type;
+			// 		// Thêm params riêng cho từng loại Tấn công
+			// 		if (basePayload.system_mode === "BASELINE") {
+			// 			basePayload.aggregation_algorithm = formData.get(
+			// 				"aggregation_algorithm",
+			// 			);
+			// 		}
+			// 		if (attackType === "GAUSSIAN_MODEL_POISONING") {
+			// 			basePayload.std = parseFloat(formData.get("std"));
+			// 		} else if (attackType === "LABEL_FLIPPING") {
+			// 			basePayload.source_class = parseInt(formData.get("source_class"));
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_flip"),
+			// 			);
+			// 		} else if (attackType === "BACKDOOR") {
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_backdoor"),
+			// 			);
+			// 		} else if (attackType == "GIA") {
+			// 			basePayload.gia_iterations = parseInt(
+			// 				formData.get("gia_iterations"),
+			// 			);
+			// 			basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+			// 		} else if (attackType == "MIA") {
+			// 			// 1. Lấy subset size
+			// 			basePayload.mia_subset_size =
+			// 				parseInt(formData.get("mia_subset_size")) || 1000;
+
+			// 			// 2. Lấy Tau (xử lý trường hợp để trống)
+			// 			const tauInput = formData.get("mia_tau");
+			// 			if (tauInput && tauInput.trim() !== "") {
+			// 				basePayload.tau = parseFloat(tauInput);
+			// 			} else {
+			// 				basePayload.tau = null; // Backend sẽ tự tính toán
+			// 			}
+			// 		}
+			// 	}
+
+			// 	// 3. Xây dựng hàng đợi Task
+			// 	taskQueue = [];
+			// 	checkboxes.forEach((cb) => {
+			// 		taskQueue.push({
+			// 			algo: cb.value, // PROPOSED, BASELINE, COCO
+			// 			rounds: rounds,
+			// 			config: { ...basePayload, system_mode: cb.value },
+			// 		});
+			// 	});
+
+			// 	// 4. Bắt đầu chạy
+			// 	if (
+			// 		confirm(
+			// 			`Bạn sắp chạy ${taskQueue.length} thuật toán x ${rounds} vòng.\nTổng cộng: ${taskQueue.length * rounds} vòng lặp.\nTiếp tục?`,
+			// 		)
+			// 	) {
+			// 		allResults = {}; // Reset kết quả cũ
+			// 		isRunningBatch = true;
+			// 		await processQueue();
+			// 	}
+			// }
+			// // Hàm xử lý hàng đợi tuần tự
+			// async function processQueue() {
+			// 	if (taskQueue.length === 0) {
+			// 		// Đã chạy xong hết -> Xuất Excel và chuyển trang
+			// 		finishBatch();
+			// 		return;
+			// 	}
+
+			// 	const currentTask = taskQueue.shift(); // Lấy task đầu tiên
+			// 	const algoName = currentTask.algo;
+			// 	const rounds = currentTask.rounds;
+
+			// 	updateStatus(`Đang chạy thuật toán: <b>${algoName}</b> (0/${rounds})`);
+
+			// 	// Container lưu kết quả của thuật toán này
+			// 	let algoMetrics = [];
+
+			// 	try {
+			// 		for (let i = 0; i < rounds; i++) {
+			// 			// Payload
+			// 			let payload = {
+			// 				...currentTask.config,
+			// 				target_rounds: rounds, // Để backend biết
+			// 				reset: i === 0, // Chỉ reset ở vòng 0 của mỗi thuật toán
+			// 			};
+
+			// 			// Gọi API
+			// 			const res = await fetch("/run_round", {
+			// 				method: "POST",
+			// 				headers: { "Content-Type": "application/json" },
+			// 				body: JSON.stringify(payload),
+			// 			});
+
+			// 			const data = await res.json();
+			// 			if (data.status !== "success") throw new Error(data.message);
+
+			// 			// Lưu metric vòng này
+			// 			// Giả sử backend trả về data.metrics chứa { accuracy, loss, ... }
+			// 			// Nếu backend chưa trả về metrics từng vòng, bạn cần sửa backend hoặc
+			// 			// gọi API /get_metrics sau mỗi vòng.
+			// 			// Ở đây tôi giả định bạn sẽ lấy full history sau khi chạy xong 1 algo.
+
+			// 			updateStatus(
+			// 				`Đang chạy thuật toán: <b>${algoName}</b> (${i + 1}/${rounds})`,
+			// 			);
+			// 		}
+
+			// 		// Sau khi chạy xong 1 thuật toán, gọi API lấy toàn bộ metrics của nó
+			// 		const historyRes = await fetch("/get_metrics"); // Bạn cần có API này hoặc lấy từ biến globalHistory
+			// 		const historyData = await historyRes.json();
+
+			// 		// Lưu vào biến tổng
+			// 		allResults[algoName] = historyData;
+
+			// 		// Nghỉ 1 chút trước khi qua thuật toán mới
+			// 		await new Promise((r) => setTimeout(r, 1000));
+
+			// 		// Đệ quy để chạy task tiếp theo
+			// 		processQueue();
+			// 	} catch (err) {
+			// 		alert(`Lỗi khi chạy ${algoName}: ${err.message}`);
+			// 		isRunningBatch = false;
+			// 	}
+			// }
+			// // Gán sự kiện
+			// document
+			// 	.getElementById("baselineForm")
+			// 	.addEventListener("submit", (e) => handleRunAll(e, "BASELINE"));
+			// document
+			// 	.getElementById("attackForm")
+			// 	.addEventListener("submit", (e) => handleRunAll(e, "ATTACK"));
 		</script>
 	</body>
 </html>
