@@ -40,7 +40,8 @@ class WorkerNode:
         self.optimizer = torch.optim.SGD(
             self.model.parameters(), 
             lr=Config.LEARNING_RATE, 
-            momentum=Config.MOMENTUM
+            momentum=Config.MOMENTUM,
+            weight_decay=Config.WEIGHT_DECAY
         )
         # Các tham số sử dụng cho giải thuật DFCA
         self.cluster_models_cache = {}
@@ -159,29 +160,149 @@ class WorkerNode:
         self.model.load_state_dict(cluster_models[best_cid])
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
 
-    def train(self):
-        """Bước 2: Huấn luyện cục bộ (Local Training)"""
-        # self.model.train()
-        # # ... logic training loop (SGD) ...
-        self.optimizer = torch.optim.SGD(self.model.parameters(), 
-                                   lr=self.config.get('learning_rate', 0.01),
-                                   momentum=0.9)
-        if self.attack_strategy.is_malicious:
-            weights = self.attack_strategy.execute(self)
-            return {
-                "weights": weights,
-                "loss": None,
-            }
-        else:
-            weights, loss = self._standard_train()
-            return {
-                "weights": weights,
-                "loss": loss
-            }
+    # def train(self):
+    #     """Bước 2: Huấn luyện cục bộ (Local Training)"""
+    #     # self.model.train()
+    #     # # ... logic training loop (SGD) ...
+    #     self.optimizer = torch.optim.SGD(self.model.parameters(), 
+    #                                lr=self.config.get('learning_rate', 0.01),
+    #                                momentum=0.9)
+    #     if self.attack_strategy.is_malicious:
+    #         weights = self.attack_strategy.execute(self)
+    #         return {
+    #             "weights": weights,
+    #             "loss": None,
+    #         }
+    #     else:
+    #         weights, loss = self._standard_train()
+    #         return {
+    #             "weights": weights,
+    #             "loss": loss
+    #         }
         # return self.attack_strategy.execute(self)
+    def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
+        """
+        LDP dạng thưa (Sparse LDP):
+        Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
+        Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
+        """
+        if not Config.ENABLE_LDP:
+            return delta
+
+        noisy_delta = {}
+        
+        # 1. Tính toán ngưỡng Top-k
+        all_values = []
+        for v in delta.values():
+            if v.dtype in [torch.float, torch.float32]:
+                all_values.append(v.view(-1).abs())
+        
+        if not all_values: return delta
+        
+        full_vec = torch.cat(all_values)
+        total_params = full_vec.numel()
+        k = int(total_params * sparsity)
+        if k < 1: k = 1
+        
+        # Tìm giá trị ngưỡng (threshold) để lọt vào top k
+        top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
+
+        # 2. Lấy Sigma và Clipping Threshold
+        # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
+        clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
+        sigma = LDP.get_ldp_sigma()
+        print(f"SIgma applied in LDP for model: {sigma}")
+        
+        # 3. Áp dụng Mask & Noise
+        for k, v in delta.items():
+            if v.dtype not in [torch.float, torch.float32]:
+                noisy_delta[k] = v
+                continue
+
+            # Mask: 1 nếu thuộc Top-k, 0 nếu không
+            mask = (v.abs() >= top_k_threshold).float()
+            
+            # Clipping: Cắt update trong khoảng [-C, C]
+            # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
+            clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
+            
+            # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
+            noise = torch.normal(0, sigma, v.shape, device=self.device)
+            
+            # Update mới = (Clipped_Update + Noise) * Mask
+            # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
+            noisy_delta[k] = (clipped_v + noise) * mask
+            
+        return noisy_delta
+    def train(self):
+        """
+        Huấn luyện cục bộ có tích hợp LDP trên Update (Delta).
+        Quy trình:
+        1. Lưu W_old.
+        2. Train/Attack -> ra W_new.
+        3. Tính Delta = W_new - W_old.
+        4. Apply LDP lên Delta.
+        5. Trả về W_final = W_old + Noisy_Delta.
+        """
+        # BƯỚC 1: Snapshot model hiện tại (W_old) trước khi train
+        # Cần clone() để không bị thay đổi theo reference
+        w_old = {k: v.clone().detach() for k, v in self.model.state_dict().items()}
+        
+        weights_new = None
+        train_loss = None
+
+        # BƯỚC 2: Thực hiện Training hoặc Tấn công
+        if self.attack_strategy.is_malicious:
+            # Kẻ tấn công trả về weights độc hại
+            weights_new = self.attack_strategy.execute(self)
+            train_loss = None # Hoặc loss giả
+        else:
+            # Node thường train bình thường
+            weights_new, train_loss = self._standard_train()
+
+        # BƯỚC 3 & 4: Tính Delta và Áp dụng LDP
+        # Chỉ áp dụng LDP nếu được bật trong Config
+        if Config.ENABLE_LDP:
+            # a. Tính Delta (Update)
+            delta = {}
+            final_weights = {}
+            untouched_params = {}
+            for k in weights_new.keys():
+                if k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                    delta[k] = weights_new[k] - w_old[k]
+                else:
+                    # Giữ nguyên các tham số không train được (batchnorm stats, long types...)
+                    untouched_params[k] = weights_new[k] 
+
+            # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
+            # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
+            noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.05)
+
+            # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
+            
+            for k in weights_new.keys():
+                if k in noisy_delta and k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                    final_weights[k] = w_old[k] + noisy_delta[k]
+                elif k in untouched_params:
+                    final_weights[k] = untouched_params[k]
+                else:
+                    final_weights[k] = weights_new[k]
+        else:
+            # Nếu không dùng LDP thì trả về nguyên gốc
+            final_weights = weights_new
+
+        # Cập nhật lại model của worker với weights cuối cùng (để đồng bộ)
+        self.model.load_state_dict(final_weights)
+
+        return {
+            "weights": final_weights,
+            "loss": train_loss
+        }
     
     def _standard_train(self):
         self.model.train()
+        for param in self.model.parameters():
+            param.requires_grad = True
         _cal_epoch_loss = 0.0 # Giá trị trung bình của hàm mất mát sau mõi vòng
         for epoch in range(self.epochs):
             batch_losses = []
@@ -295,7 +416,8 @@ class WorkerNode:
         # --- BƯỚC B: CỘNG NHIỄU GAUSS - Công thức (30) ---
         
         noisy_params = {}
-        sigma = LDP.get_ldp_sigma() # Độ lệch chuẩn của nhiễu
+        sigma = LDP.get_ldp_sigma() / math.sqrt(self.config.get('num_workers')) # Độ lệch chuẩn của nhiễu
+        print(f"Sigma applied in LDP for model is: {sigma}")
         
         for k, v in params.items():
             # 1. Thực hiện cắt gọn: w_bar = w / scale
@@ -560,6 +682,21 @@ class WorkerNode:
             "loss": clean_loss / len(test_loader),
             "asr": bd_success / (bd_total + 1e-9)    # Backdoor ASR
         }
+    
+    def evaluate_privacy(self):
+        """
+        Đánh giá rủi ro quyền riêng tư dựa trên chiến lược tấn công hiện tại.
+        Hỗ trợ cả MIA và GIA.
+        """
+        # Nếu node này không phải malicious hoặc không có strategy -> An toàn (giả định)
+        if not hasattr(self, 'attack_strategy') or self.attack_strategy is None:            
+            return {}
+
+        # Gọi hàm evaluate của strategy tương ứng
+        if hasattr(self.attack_strategy, 'evaluate'):
+            return self.attack_strategy.evaluate(self)
+        
+        return {}
 
     def _add_trigger(self, images):
         """

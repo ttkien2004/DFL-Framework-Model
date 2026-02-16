@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from app.models.cnn import SimpleCNN, get_model
 from config import Config
-from app.utils.helpers import federated_averaging, compute_euclidean_distance, compute_model_hash, compute_model_norm
+from app.utils.helpers import federated_averaging, compute_euclidean_distance, compute_model_hash, compute_model_norm, get_model_size_mb
 from app.core.coco_helpers import CoCo
 from app.core.balance_helpers import Balance
 from app.core.worker import WorkerNode
@@ -182,7 +182,7 @@ class ClusterHead(Proposer):
             
             # Lưu vào danh sách chờ
             # (Bạn có thể lưu thêm worker_id nếu muốn log chi tiết ai bị loại ở bước BALANCE)
-            self.pending_models.append(formatted_params)
+            self.pending_models.append((worker_id, formatted_params))
             
             # Log (có thể comment lại nếu spam terminal quá nhiều)
             # print(f"[CH {self.cluster_id}] Received update from Worker {worker_id}")
@@ -194,6 +194,9 @@ class ClusterHead(Proposer):
         """
         Lọc mô hình độc hại sử dụng BALANCE Adaptive Threshold
         """
+        # Danh sách ID bị chặn
+
+        self.blocked_ids_this_round = set()
         if not self.pending_models:
             return []
 
@@ -207,7 +210,7 @@ class ClusterHead(Proposer):
         updates_with_distance = []
         distances = []
 
-        for update in self.pending_models:
+        for worker_id, update in self.pending_models:
             # Tính khoảng cách Euclid thực sự
             dist = compute_euclidean_distance(global_state, update)
             import math
@@ -215,17 +218,18 @@ class ClusterHead(Proposer):
                 # Nếu model nổ, khoảng cách coi như cực lớn hoặc 0 tuỳ logic hiển thị
                 dist = 1000.0
             distances.append(dist)
-            updates_with_distance.append((dist, update))
+            updates_with_distance.append((dist, worker_id, update))
 
         # 3. Tính ngưỡng thích nghi (Adaptive Threshold)
         threshold = Balance.calculate_adaptive_threshold(global_norm, distances, round_k)
 
         # 4. Lọc bỏ các model vượt quá ngưỡng
         valid_updates = []
-        for dist, update in updates_with_distance:
+        for dist, worker_id, update in updates_with_distance:
             if dist <= threshold:
                 valid_updates.append(update)
             else:
+                self.blocked_ids_this_round.add(worker_id)
                 print(f"[Refuse] Update rejected! Dist ({dist:.4f}) > Threshold ({threshold:.4f})")
 
         print(f"Cluster {self.cluster_id}: Accepted {len(valid_updates)}/{len(self.pending_models)} updates.")
@@ -323,3 +327,21 @@ class ClusterHead(Proposer):
             "model_norm": model_norm,
             "flat_weights": flat_weights
         }
+    
+    def calculate_traffic(self):
+        """Tính toán lượng dữ liệu CH gửi đi trong vòng này"""
+        traffic_mb = 0.0
+        model_size = get_model_size_mb(self.global_model)
+        
+        # 1. Downlink: Broadcast Global Model về cho Workers trong cụm
+        # Giả sử self.members chứa danh sách ID các worker
+        num_members = len(self.members) 
+        traffic_mb += num_members * model_size
+        
+        # 2. Uplink/Consensus: Gửi Secret Shares cho Ủy ban (Committee)
+        # Mỗi mảnh share có kích thước xấp xỉ model gốc (trong Shamir Secret Sharing)
+        if hasattr(self, 'committee') and self.committee:
+            num_committee = len(self.committee)
+            traffic_mb += num_committee * model_size
+            
+        return traffic_mb

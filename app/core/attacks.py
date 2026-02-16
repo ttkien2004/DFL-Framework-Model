@@ -8,6 +8,11 @@ from app.utils.poisoning import PoisonedDatasetWrapper
 from sklearn.metrics import roc_auc_score, roc_curve, accuracy_score
 from app.utils.data_loader import get_raw_dataset
 from torch.utils.data import DataLoader, Subset
+import matplotlib.pyplot as plt
+import time
+import os
+import math
+from sklearn.metrics import confusion_matrix
 
 class AttackStrategy:
     def execute(self, worker):
@@ -267,7 +272,7 @@ class MembershipInferenceStrategy(AttackStrategy):
         device = worker.device
 
         # Tính MPE cho tập member
-        mpe_members = self._calculate(victim_model, self.target_load, device)
+        mpe_members = self._calculate_mpe(victim_model, self.target_load, device)
         # Tính MPE cho tập non-member
         mpe_non_members = self._calculate_mpe(victim_model, self.non_member_loader, device)
         self._make_decision_and_report(mpe_members, mpe_non_members)
@@ -281,6 +286,8 @@ class MembershipInferenceStrategy(AttackStrategy):
 
         with torch.no_grad():
             for data, target in dataloader:
+                data, target = data.to(device), target.to(device)
+
                 logits = model(data)
                 probs = F.softmax(logits, dim=1)
 
@@ -294,7 +301,7 @@ class MembershipInferenceStrategy(AttackStrategy):
                 weighted_log = probs * log_one_minus_p
 
                 sum_all = torch.sum(weighted_log, dim=1)
-                term_at_y = p_true * torch.log(1.0 -p_true + probs)
+                term_at_y = weighted_log.gather(1, target.view(-1, 1)).squeeze()
                 sum_others = sum_all - term_at_y
                 term2 = -sum_others
                 # Tổng hợp MPE
@@ -330,10 +337,341 @@ class MembershipInferenceStrategy(AttackStrategy):
         print(f"|-- MIA Results: Acc={acc:.4f}, AUC={auc:.4f}, TPR@1%FPR={tpr_1fpr:.4f}")
         print(f"|-- Decision Threshold (Tau): {self.tau:.4f}")
         print(f"|-- Avg MPE: Member={np.mean(mpe_members):.4f}, Non-Member={np.mean(mpe_non_members):.4f}")
+    
+    def evaluate(self, worker):
+        victim_model = worker.model
+        device = worker.device
+        criterion = torch.nn.CrossEntropyLoss()
+        # Tính toán hiệu năng gốc
+        member_acc, member_loss = self._evaluate_model_performance(victim_model, self.target_load, device=device, criterion=criterion)
+        non_member_acc, non_member_loss = self._evaluate_model_performance(victim_model, self.non_member_loader, device=device, criterion=criterion)
+        # 1. Tính toán lại MPE
+        mpe_members = self._calculate_mpe(victim_model, self.target_load, device)
+        mpe_non_members = self._calculate_mpe(victim_model, self.non_member_loader, device)
+        
+        # 2. Chuẩn bị labels
+        y_true = np.concatenate([np.ones(len(mpe_members)), np.zeros(len(mpe_non_members))])
+        scores = np.concatenate([mpe_members, mpe_non_members])
+        neg_scores = -scores # Vì MPE càng thấp càng có khả năng là member (loss thấp)
+
+        # 3. Tính metrics
+        # a. Tìm ngưỡng Tau tối ưu (nếu chưa có)
+        if self.tau is None:
+            fpr, tpr, thresholds = roc_curve(y_true, neg_scores)
+            optimal_idx = np.argmax(tpr - fpr)
+            self.tau = -thresholds[optimal_idx] # Lưu ý dấu -
+            
+        y_pred = (scores <= self.tau).astype(int)
+        
+        acc = accuracy_score(y_true, y_pred)
+        
+        try:
+            auc = roc_auc_score(y_true, neg_scores)
+        except:
+            auc = 0.5 # Fallback nếu lỗi
+
+        # b. TPR @ 1% FPR
+        fpr_list, tpr_list, _ = roc_curve(y_true, neg_scores)
+        # Tìm vị trí FPR gần 0.01 nhất
+        idx_1pct = np.searchsorted(fpr_list, 0.01)
+        # Kiểm tra biên
+        if idx_1pct >= len(tpr_list): idx_1pct = len(tpr_list) - 1
+        tpr_1fpr = tpr_list[idx_1pct]
+
+        # c. Advantage = TPR - FPR
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        tpr = tp / (tp + fn + 1e-9)
+        fpr = fp / (fp + tn + 1e-9)
+        advantage = tpr - fpr
+
+        return {
+            "privacy_attack_acc": acc,
+            "privacy_auc": auc,
+            "privacy_tpr_1fpr": tpr_1fpr,
+            "privacy_advantage": advantage,
+
+            "member_accuracy": member_acc,
+            "non_member_accuracy": non_member_acc,
+            "member_loss": member_loss,
+            "non_member_loss": non_member_loss
+        }
+    
+    def _evaluate_model_performance(self, model, dataloader, device, criterion):
+        """Hàm phụ: Tính Accuracy và Loss thông thường"""
+        model.eval()
+        correct = 0
+        total = 0
+        total_loss = 0.0
+        
+        with torch.no_grad():
+            for data, target in dataloader:
+                data, target = data.to(device), target.to(device)
+                outputs = model(data)
+                loss = criterion(outputs, target)
+                total_loss += loss.item() * data.size(0)
+                
+                _, predicted = torch.max(outputs.data, 1)
+                total += target.size(0)
+                correct += (predicted == target).sum().item()
+        
+        avg_loss = total_loss / total if total > 0 else 0.0
+        acc = correct / total if total > 0 else 0.0
+        return acc, avg_loss
+
+class GradientInversionStrategy(AttackStrategy):
+    """
+    Tấn công Gradient Inversion (DLG): Tái tạo dữ liệu gốc từ Gradient.
+    """
+    def __init__(self, config):
+        self.config = config
+        self.num_iterations = config.get('gia_iterations', 300) # Số vòng lặp tối ưu
+        self.learning_rate = config.get('gia_lr', 1.0)
+        
+        # Tạo thư mục lưu ảnh tái tạo
+        self.save_dir = "reconstructed_images"
+        os.makedirs(self.save_dir, exist_ok=True)
+
+    # def execute(self, worker):
+    #     """
+    #     Thực hiện tấn công:
+    #     1. Lấy dữ liệu thật (Ground Truth) từ Worker để tính Gradient thật (Mô phỏng việc nghe lén).
+    #     2. Tạo dữ liệu giả (Dummy).
+    #     3. Tối ưu hóa dữ liệu giả để Gradient giả -> Gradient thật.
+    #     """
+    #     print(f"[Attacker {worker.id}] Starting Gradient Inversion Attack...")
+        
+    #     # --- BƯỚC 0: CHUẨN BỊ DỮ LIỆU MỤC TIÊU (Ground Truth) ---
+    #     # Lấy 1 batch từ data loader của worker (Giả lập việc bắt được gradient của nạn nhân này)
+    #     with torch.enable_grad():
+    #         worker.model.train() # Chuyển sang mode train (quan trọng cho BatchNorm/Dropout)
+    #         for param in worker.model.parameters():
+    #             param.requires_grad = True
+    #         data_iter = iter(worker.data_loader)
+    #         gt_data, gt_label = next(data_iter)
+            
+    #         # Để demo, ta chỉ tái tạo 1 ảnh đầu tiên trong batch
+    #         gt_data = gt_data[0:1].to(worker.device)
+    #         gt_label = gt_label[0:1].to(worker.device)
+            
+    #         # Tính Gradient Thật (Original Gradient - nabla W)
+    #         worker.model.zero_grad()
+    #         pred = worker.model(gt_data)
+    #         criterion = torch.nn.CrossEntropyLoss()
+    #         target_loss = criterion(pred, gt_label)
+            
+    #         # Lấy đạo hàm của từng tham số
+    #         original_dy_dx = torch.autograd.grad(target_loss, worker.model.parameters())
+    #         original_dy_dx = [gx.detach().clone() for gx in original_dy_dx] # Detach để không ảnh hưởng graph
+
+    #         # --- BƯỚC 1: KHỞI TẠO DỮ LIỆU GIẢ (Dummy Data Initialization) ---
+    #         # Tạo input ngẫu nhiên (Gaussian noise) cùng kích thước với ảnh thật
+    #         dummy_data = torch.randn(gt_data.size()).to(worker.device).requires_grad_(True)
+            
+    #         # Khởi tạo nhãn giả (Ở đây giả định ta chưa biết nhãn, random)
+    #         dummy_label = torch.randn((1, worker.num_classes)).to(worker.device).requires_grad_(True)
+
+    #         # Optimizer: L-BFGS thường hoạt động tốt nhất cho việc tái tạo ảnh
+    #         optimizer = torch.optim.LBFGS([dummy_data, dummy_label], lr=self.learning_rate)
+            
+    #         history = []
+            
+    #         # --- BƯỚC 4: CẬP NHẬT DỮ LIỆU GIẢ (Lặp lại) ---
+    #         print(f"   -> Reconstructing... (Max {self.num_iterations} iters)")
+            
+    #         for iters in range(self.num_iterations):
+    #             def closure():
+    #                 optimizer.zero_grad()
+                    
+    #                 # --- BƯỚC 2: TÍNH TOÁN GRADIENT GIẢ (Dummy Gradient) ---
+    #                 pred_dummy = worker.model(dummy_data)
+                    
+    #                 # Dùng Softmax cho dummy label để biến nó thành xác suất
+    #                 dummy_loss = criterion(pred_dummy, F.softmax(dummy_label, dim=-1)) 
+                    
+    #                 dummy_dy_dx = torch.autograd.grad(dummy_loss, worker.model.parameters(), create_graph=True)
+                    
+    #                 # --- BƯỚC 3: SO KHỚP GRADIENT (Gradient Matching) ---
+    #                 grad_diff = 0
+    #                 for gx, gy in zip(dummy_dy_dx, original_dy_dx):
+    #                     # Khoảng cách Euclid (MSE) giữa 2 gradients
+    #                     grad_diff += ((gx - gy) ** 2).sum()
+                    
+    #                 grad_diff.backward()
+    #                 return grad_diff
+                
+    #             # Bước cập nhật của L-BFGS
+    #             optimizer.step(closure)
+                
+    #             # Logging
+    #             if iters % 50 == 0:
+    #                 with torch.no_grad():
+    #                     current_loss = closure()
+    #                     # Tính MSE giữa ảnh giả và ảnh thật để xem độ giống
+    #                     mse = ((dummy_data - gt_data)**2).mean().item()
+    #                     print(f"      Iter {iters}: Grad Loss={current_loss.item():.4f}, Image MSE={mse:.4f}")
+    #                     history.append(mse)
+                        
+    #                     # Nếu MSE đủ nhỏ thì dừng sớm
+    #                     if current_loss.item() < 1e-8:
+    #                         break
+
+    #         # --- KẾT THÚC: LƯU KẾT QUẢ ---
+    #         self._save_result_image(gt_data, dummy_data, worker.id)
+    #         print(f"   -> Reconstruction finished. Image saved to {self.save_dir}")
+
+    #         # Trả về weights thật để không làm hỏng quy trình FL (Attack này là nghe lén, không phá hoại)
+    #         # Hoặc trả về weights ngẫu nhiên nếu muốn giả vờ không train.
+    #         return worker.model.state_dict()
+    def execute(self, worker):
+        print(f"[Attacker {worker.id}] Starting Gradient Inversion Attack...")
+        
+        # 1. SETUP MODEL: Bắt buộc bật gradient cho weights
+        worker.model.to(worker.device)
+        worker.model.train()
+        worker.model.zero_grad()
+        
+        # Double check và force requires_grad=True
+        # Lấy danh sách params để dùng sau này (tránh gọi model.parameters() nhiều lần có thể sinh generator mới)
+        model_params = list(worker.model.parameters())
+        for param in model_params:
+            param.requires_grad = True
+            if param.grad is not None:
+                param.grad.zero_()
+
+        # 2. LẤY GROUND TRUTH GRADIENT
+        data_iter = iter(worker.data_loader)
+        gt_data, gt_label = next(data_iter)
+        gt_data = gt_data[0:1].to(worker.device)
+        gt_label = gt_label[0:1].to(worker.device)
+        
+        pred = worker.model(gt_data)
+        criterion = torch.nn.CrossEntropyLoss()
+        target_loss = criterion(pred, gt_label)
+        
+        # Tính đạo hàm thật
+        original_dy_dx = torch.autograd.grad(target_loss, model_params)
+        original_dy_dx = [gx.detach().clone() for gx in original_dy_dx]
+
+        # 3. SETUP DUMMY DATA
+        dummy_data = torch.randn(gt_data.size()).to(worker.device).requires_grad_(True)
+        # Dummy label: Dùng softmax nên để requires_grad=True để tối ưu cả label
+        dummy_label = torch.randn((1, worker.num_classes)).to(worker.device).requires_grad_(True)
+
+        optimizer = torch.optim.LBFGS([dummy_data, dummy_label], lr=self.learning_rate)
+        
+        print(f"   -> Reconstructing... (Max {self.num_iterations} iters)")
+
+        for iters in range(self.num_iterations):
+            def closure():
+                optimizer.zero_grad()
+                
+                # Forward pass với dummy data
+                pred_dummy = worker.model(dummy_data)
+                dummy_loss = criterion(pred_dummy, F.softmax(dummy_label, dim=-1))
+                
+                # TÍNH DUMMY GRADIENT (Đạo hàm bậc 1)
+                # create_graph=True là BẮT BUỘC để tính đạo hàm bậc 2 cho việc update dummy_data
+                dummy_dy_dx = torch.autograd.grad(dummy_loss, model_params, create_graph=True)
+                
+                # TÍNH LOSS GIỮA 2 GRADIENTS
+                grad_diff = 0
+                for gx, gy in zip(dummy_dy_dx, original_dy_dx):
+                    grad_diff += ((gx - gy) ** 2).sum()
+                
+                # Backward pass (Tính đạo hàm bậc 2 để update dummy_data)
+                grad_diff.backward()
+                
+                return grad_diff
+            
+            optimizer.step(closure)
+            
+            # Logging (chỉ lấy giá trị để in, không tính toán graph)
+            if iters % 50 == 0:
+                # with torch.no_grad():
+                    # Tính lại loss để in ra (không backward)
+                pred_d = worker.model(dummy_data)
+                d_loss = criterion(pred_d, F.softmax(dummy_label, dim=-1))
+                d_dy_dx = torch.autograd.grad(d_loss, model_params, create_graph=False) # False ở đây để tiết kiệm
+                
+                current_loss = 0
+                for gx, gy in zip(d_dy_dx, original_dy_dx):
+                    current_loss += ((gx - gy) ** 2).sum()
+                    
+                mse = ((dummy_data - gt_data)**2).mean().item()
+                print(f"      Iter {iters}: Grad Loss={current_loss.item():.4f}, Image MSE={mse:.4f}")
+                
+                if current_loss.item() < 1e-8:
+                    break
+        
+        self.reconstructed_data = dummy_data.detach().clone().cpu()
+        self.ground_truth = gt_data.detach().clone().cpu()
+        # Lưu ảnh và return
+        self._save_result_image(gt_data, dummy_data, worker.id)
+        print(f"   -> Reconstruction finished. Image saved to {self.save_dir}")
+        # Reset model về trạng thái không cần grad để trả về (quan trọng cho Baseline)
+        for param in model_params:
+            param.requires_grad = False
+            
+        return worker.model.state_dict()
+
+    def _save_result_image(self, true_tensor, dummy_tensor, worker_id):
+        """Hàm phụ trợ để lưu ảnh so sánh"""
+        # Denormalize (giả sử CIFAR/MNIST chuẩn hóa 0.5)
+        # Bạn cần chỉnh lại mean/std tùy dataset
+        def _denorm(tensor):
+            return tensor.clone().detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+        
+        # Ảnh gốc
+        orig_img = _denorm(true_tensor)
+        # Normalize về [0,1] để plot
+        orig_img = (orig_img - orig_img.min()) / (orig_img.max() - orig_img.min())
+        axes[0].imshow(orig_img, cmap='gray' if orig_img.shape[2]==1 else None)
+        axes[0].set_title("Ground Truth (Victim)")
+        axes[0].axis('off')
+        
+        # Ảnh tái tạo
+        rec_img = _denorm(dummy_tensor)
+        rec_img = (rec_img - rec_img.min()) / (rec_img.max() - rec_img.min())
+        axes[1].imshow(rec_img, cmap='gray' if rec_img.shape[2]==1 else None)
+        axes[1].set_title("Reconstructed (Attacker)")
+        axes[1].axis('off')
+        
+        plt.savefig(f"{self.save_dir}/gia_worker_{worker_id}_{int(time.time())}.png")
+        plt.close()
+
+    def evaluate(self, worker):
+        # Kiểm tra xem đã chạy tấn công chưa
+        if not hasattr(self, 'reconstructed_data') or not hasattr(self, 'ground_truth'):
+            print(f"[DEBUG] Worker {worker.id}: Missing reconstruction data in strategy!")
+            return {"recon_mse": 0.0, "recon_psnr": 0.0}
+
+        # Lấy dữ liệu (Tensor)
+        rec = self.reconstructed_data.detach().cpu()
+        gt = self.ground_truth.detach().cpu()
+
+        # 1. MSE (Mean Squared Error)
+        mse = ((rec - gt) ** 2).mean().item()
+
+        # 2. PSNR (Peak Signal-to-Noise Ratio)
+        # Công thức: 10 * log10(MAX^2 / MSE). Nếu ảnh norm [0,1] thì MAX=1.
+        if mse == 0:
+            psnr = 100.0 # Vô cực
+        else:
+            psnr = 10 * math.log10(1.0 / mse)
+
+        # 3. SSIM (Structural Similarity)
+        # Để đơn giản ta dùng MSE và PSNR.
+
+        return {
+            "recon_mse": mse,   # Càng thấp càng nguy hiểm
+            "recon_psnr": psnr  # Càng cao càng nguy hiểm
+        }
 
 class AttackFactory:
     """Strategy dựa trên tên"""
-    _MIA_DATA_CAHCE = {
+    _MIA_DATA_CACHE = {
         'train': None,
         'test': None,
         'name': None
@@ -369,6 +707,8 @@ class AttackFactory:
             return ModelPoisoningStrategy(noise_scale=noise_scale)
         elif attack_type == "MIA":
             return AttackFactory._create_mia_strategy(config)
+        elif attack_type in ['GIA', 'GRADIENT_INVERSION']:
+            return GradientInversionStrategy(config=config)
         else:
             return HonestStrategy() # Mặc định là Honest
         

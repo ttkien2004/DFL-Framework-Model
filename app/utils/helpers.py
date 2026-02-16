@@ -5,6 +5,7 @@ import hashlib
 import json
 import copy
 import math
+import torch.nn as nn
 # --- 1. CHUYỂN ĐỔI DỮ LIỆU (SERIALIZATION) ---
 
 def model_to_json(state_dict):
@@ -106,3 +107,20 @@ def sanitize_for_json(data):
         if math.isnan(data) or math.isinf(data):
             return None # JSON sẽ hiểu là null
     return data
+
+def get_model_size_mb(model):
+    """Tính kích thước model theo MB (bao gồm parameters và buffers)"""
+    param_size = 0
+    total_size = 0
+    if isinstance(model, dict):
+        for tensor in model.values():
+            total_size += tensor.nelement() * tensor.element_size()
+    elif isinstance(model, nn.Module):
+        for param in model.parameters():
+            total_size += param.nelement() * param.element_size()
+        buffer_size = 0
+        for buffer in model.buffers():
+            total_size += buffer.nelement() * buffer.element_size()
+    
+    size_mb = total_size / (1024 ** 2)
+    return size_mb

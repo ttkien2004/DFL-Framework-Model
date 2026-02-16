@@ -9,9 +9,11 @@ from app.core.cluster_head import ClusterHead
 from app.scenarios.scenario_4_sec import ScenarioExperiment4
 from app.scenarios.scenario_1_baseline import ScenarioExperiment1
 from app.utils.data_loader import get_global_test_loader
-from app.utils.helpers import compute_model_norm, sanitize_for_json
+from app.utils.helpers import compute_model_norm, sanitize_for_json, get_model_size_mb
 from app.blockchain.consensus import Blockchain
 from app.core.ipfs import StorageService
+from app.core.coco_helpers import CoCo
+import numpy as np
 import copy
 from collections import defaultdict
 import math
@@ -38,7 +40,8 @@ class SimulationEngine:
             "rounds": [],
             "roles": [],
             "cluster_assignments": [],
-            "reputation": []
+            "reputation": [],
+            "comm_traffic_mb": []
         }
         
     
@@ -192,7 +195,8 @@ class SimulationEngine:
 
         final_result = {
             **execution_result,  # Bung toàn bộ kết quả vận hành (Logs, Topology...)
-            **security_metrics,  # Bung toàn bộ chỉ số bảo mật (ASR, TER...)
+            **security_metrics,  # Bung toàn bộ chỉ số bảo mật (ASR, TER...),
+            "algo_name": req_data.get('aggregation_algorithm', "Proposed"),
             "round": round_id,
             "status": "success"
         }
@@ -200,27 +204,57 @@ class SimulationEngine:
 
     def _run_round_baseline(self, round_id):
         # Pha 1: Training & Attack (Tự động kích hoạt Attack nếu Scenario đã setup)
+        algo_name = self.engine_config.get('aggregation_algorithm', None)
+        print(self.engine_config, "WTF", flush=True)
+        is_coco = True if algo_name and algo_name == "CoCo" else False
+        if is_coco:
+            n = len(self.workers)
+            self.coco_state = {
+                'A': np.ones((n,n)),
+                'r': np.ones(n),
+                'D_max': 5.0,
+                't_prev': float('inf')
+            }
+            np.fill_diagonal(self.coco_state['A'], 0)
         print("   [Phase 1] Local Training...")
-        for w in self.workers:
+        for w in self.workers:            
             w.train()
 
         # Pha 2: Gossip (Truyền tin)
         print("   [Phase 2] Gossiping...")
+        if is_coco:
+            self.coco_state, improved, t_opt = CoCo.optimize_network(self.workers, self.coco_state)
+            if improved:
+                print(f"CoCo Optimized: Time={t_opt:.3f}s, Avg Compression={np.mean(self.coco_state['r']):.2f}")
+            for i, w in enumerate(self.workers):
+                new_neighbors_idx = np.where(self.coco_state['A'][i] == 1)[0]
+                neighbord_ids = [self.workers[idx].id for idx in new_neighbors_idx]
+
+                w.apply_coco_config(neighbord_ids, self.coco_state['r'][i])
+
         count_gossips = 0
+        round_max_latency = 0.0
+        total_traffic = 0.0
+        workers_map = {w.id: w for w in self.workers}
         for w in self.workers:
             # Gửi model cho hàng xóm
-            payload = w.model.state_dict()
-            for neighbor_id in w.neighbors:
-                neighbor = self.workers[neighbor_id]
-                neighbor.received_updates[w.id] = copy.deepcopy(payload)
-                count_gossips += 1
+            # payload = w.model.state_dict()
+            # for neighbor_id in w.neighbors:
+            #     neighbor = self.workers[neighbor_id]
+            #     neighbor.received_updates[w.id] = copy.deepcopy(payload)
+            #     count_gossips += 1
+            count, latency, traffic = w.gossip(workers_map, is_coco_mode=is_coco)
+            count_gossips += count
+            total_traffic += traffic
+            round_max_latency = max(round_max_latency, latency)
         print(f"   -> Total Gossips Sent: {count_gossips}")
+        if is_coco: print(f"   -> Estimated Latency: {round_max_latency:.4f}s")
         # Pha 3: Aggregation
         print("   [Phase 3] Aggregation...")
         accuracies = []
         
         for w in self.workers:
-            w.aggregate() # Gọi hàm aggregate của StandardDFLNode
+            w.aggregate(current_round_id=round_id) # Gọi hàm aggregate của StandardDFLNode
             # Đánh giá nhanh (Optional)
             # acc = w.evaluate(self.test_loader)
             # accuracies.append(acc)
@@ -229,7 +263,10 @@ class SimulationEngine:
         # print(f"[BASELINE] Round {round_id} finished. Avg Acc: {avg_acc:.4f}")
         return {
             "status": "aggregated",
-            "topology": "Full Mesh / P2P",
+            "topology": "Dynamic (CoCo)" if is_coco else "Fixed",
+            "latency": round_max_latency if is_coco else 0,
+            "avg_compression": np.mean(self.coco_state['r']) if is_coco else 1.0,
+            "comm_traffic_mb": total_traffic,
             "hello": "WTF"
         }
     
@@ -238,19 +275,6 @@ class SimulationEngine:
         Thực thi toàn bộ quy trình 1 vòng (Round) gồm 5 pha.
         """
         start_time = time.time()
-        # scenario_id = req_data.get('scenario_id', 1)
-        
-        # print(f"\n--- ENGINE: STARTING ROUND {round_id} | SCENARIO {scenario_id} ---")
-
-        # # 1. SETUP SCENARIO
-        # # ----------------------------------------------------------------------
-        # scenario_runner = ScenarioFactory.get_runner(scenario_id, req_data)
-        # scenario_runner.apply(self.workers)
-        
-        # # Cập nhật dataset nếu thay đổi
-        # req_dataset = req_data.get('dataset', 'cifar10')
-        # self.current_dataset = req_dataset
-
         # 2. EXECUTE 5 PHASES
         # ----------------------------------------------------------------------
         proposer, committee, active_workers = self._elect_committee(round_id)
@@ -266,6 +290,11 @@ class SimulationEngine:
         }
         # Phase 1: Clustering
         clusters = self._phase_clustering(workers_pools=active_workers,round_id=round_id)
+        self.cluster_heads = []
+        for members in clusters.values():
+            head = next((node for node in members if node.is_head), None)
+            if head:
+                self.cluster_heads.append(head)
         # Thu thập log hiển thị
         cluster_map = {}
         for cid, members in clusters.items():
@@ -277,7 +306,7 @@ class SimulationEngine:
         instruction_maps, all_topologies = self._phase_coco_optimization(clusters, worker_updates_cache)
 
         # Phase 4: Gossip & Aggregation
-        round_results, real_accuracies = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
+        round_results, real_accuracies, total_traffic = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
 
         # Phase 5: Consensus
         consensus_results, consensus_log = self._phase_consensus(round_results)
@@ -302,6 +331,7 @@ class SimulationEngine:
         self.logs["roles"].append(current_roles)
         self.logs["cluster_assignments"].append(cluster_map)
         self.logs["reputation"].append(self.blockchain.reputation_scores.copy())
+        self.logs["comm_traffic_mb"].append(total_traffic)
         return {
             "execution_time": execution_time,
             "global_loss": global_train_loss,
@@ -364,7 +394,6 @@ class SimulationEngine:
         # --- BƯỚC 3: BẦU CHỌN CLUSTER HEAD ---
         # Trong mỗi cụm, ta cần 1 người làm Head để tổng hợp
         # Chiến lược: Chọn người có Loss thấp nhất làm Head (Best Performance)
-        # Hoặc đơn giản: Chọn người đầu tiên trong danh sách
         
         active_clusters_count = 0
         
@@ -375,10 +404,11 @@ class SimulationEngine:
                 
             active_clusters_count += 1
             
-            # Chọn Head: Ở đây tôi chọn người có Loss thấp nhất trong cụm
+            # Chọn Head: chọn người có Loss thấp nhất trong cụm
             # (Giả sử join_cluster đã lưu loss vào biến w.current_loss, nếu chưa thì chọn random)
             # Cách đơn giản nhất: Chọn thành viên đầu tiên làm Head
-            head_node = members[0] 
+            # head_node = members[0]
+            head_node = min(members, key=lambda w: getattr(w, 'current_loss', float('inf')))
             
             head_node.is_head = True
             head_node.cluster_head_id = head_node.id # Chính nó là Head
@@ -416,16 +446,16 @@ class SimulationEngine:
             
             # 1. Local Training
             result = w.train()
-            w_new = result['weights']
+            w_final = result['weights']
             w_loss = result.get('loss')
             if w_loss is not None:
                 train_losses.append(w_loss)
             
             # 2. Local Differential Privacy (Nếu có)
-            w_dp = w.apply_ldp(w_new)
+            # w_dp = w.apply_ldp(w_new)
             
             # Lưu vào cache để lát nữa Head thu thập
-            worker_updates_cache[w.id] = w_dp
+            worker_updates_cache[w.id] = w_final
 
         global_train_loss = sum(train_losses) / len(train_losses) if train_losses else 0.0
         print(f" -> Trained {len(worker_updates_cache)} workers.")
@@ -489,6 +519,7 @@ class SimulationEngine:
                          for node in cluster
                          if node.is_head}
         final_updates_for_ch = {}
+        total_traffic = 0.0
 
         if not cluster_heads:
             print("Warning: No Cluster Heads found! Check _phase_clustering.")
@@ -509,6 +540,7 @@ class SimulationEngine:
 
         # Send to CH
         for w_id, model_state in final_updates_for_ch.items():
+            total_traffic += get_model_size_mb(model=model_state)
             ch_id = worker_lookup[w_id].cluster_id
             cluster_heads[ch_id].receive_update(w_id, model_state)
 
@@ -522,13 +554,14 @@ class SimulationEngine:
                 'committee': self.current_committee
             })
             aggregate_res = ch.aggregate(round_k=round_id)
+            total_traffic += ch.calculate_traffic()
 
             # Giả lập validate accuracy
             # simulated_acc = min(95.0, 15.0 + round_id * 2.5 + random.uniform(-2, 3))
             accuracies.append(0.0)
-            results.append({"cluster_id": ch.cluster_id,"accuracy": 0.0, **aggregate_res})
+            results.append({"cluster_id": ch.cluster_id, **aggregate_res})
             
-        return results, accuracies
+        return results, accuracies, total_traffic
 
     # def _phase_aggregation(self, clusters, instruction_maps, worker_updates_cache, round_id):
     #     print("[Phase 4] Aggregation & Secret Sharing...")
@@ -769,6 +802,7 @@ class SimulationEngine:
         """
         attack_type = attack_config.get('attack_type', 'NONE')
         benign_workers = [w for w in self.workers if not w.is_malicious]
+        malicious_workers = [w for w in self.workers if w.is_malicious]
         
         if not benign_workers: return {}
         
@@ -856,6 +890,32 @@ class SimulationEngine:
                 "asr": safe_mean(asrs),
                 "clean_acc": safe_mean(accuracies)
             }
+        elif attack_type in ["MIA", "GIA", "GRADIENT_INVERSION"]:
+            target_workers = malicious_workers if malicious_workers else benign_workers
+            results = defaultdict(list)
+            gen_errors = []
+
+            for w in target_workers:
+                m = w.evaluate_privacy()
+                print(m, "MEtrics do not exist?", flush=True)
+
+                for key, val in m.items():
+                    results[key].append(val)
+            # Tính trung bình cho tất cả key thu được
+            for key, vals in results.items():
+                self.specific_metrics[key] = safe_mean(vals)
+            
+            if attack_type == 'MIA':
+                # Thêm Gen error
+                train_acc = m.get('member_acc', 0.0)
+                test_acc = m.get('non_member_acc', 0.0)
+                gen_errors.append(abs(train_acc - test_acc))
+                self.specific_metrics['gen_error'] = safe_mean(gen_errors)
+                accuracies.append(test_acc)
+                pass
+            elif attack_type in ['GIA', 'GRADIENT_INVERSION']:                
+                print(f"   [GIA Report] Avg MSE: {self.specific_metrics.get('recon_mse', 0):.4f}, "
+                      f"PSNR: {self.specific_metrics.get('recon_psnr', 0):.2f} dB")
         else:
             # Fallback cho trường hợp chạy bình thường (NONE)
             is_attack = False
@@ -915,7 +975,7 @@ class SimulationEngine:
             consensus_error = 0.0
 
         # C. Detection Metrics
-        tpr, fpr = self._calculate_detection_rate()
+        # tpr, fpr = self._calculate_detection_rate()
 
         # D. Comm Cost (Ước tính)
         model_size_mb = 1.2 
@@ -930,8 +990,8 @@ class SimulationEngine:
         if not is_attack:
             return response_metrics
         else:
-            response_metrics["tpr"] = tpr
-            response_metrics["fpr"] = fpr
+            response_metrics["tpr"] = 0.0
+            response_metrics["fpr"] = 0.0
             return response_metrics
     def _calculate_detection_rate(self):
         """
@@ -940,24 +1000,36 @@ class SimulationEngine:
         """
         # Ground Truth
         actual_malicious = set([w.id for w in self.workers if w.is_malicious])
-        actual_benign = set([w.id for w in self.workers if not w.is_malicious])
-        
-        # System Output (Predicted Malicious)
-        # Logic này phụ thuộc vào thuật toán của bạn. 
-        # Ví dụ: Trong DFCA, những node KHÔNG được chọn vào aggregation list cuối cùng.
-        # Hoặc những node có trust score thấp.
-        # Ở đây tôi giả định bạn có biến self.blocked_nodes lưu danh sách bị chặn trong vòng này.
-        predicted_malicious = getattr(self, 'blocked_nodes', set())
+        actual_benign = set([w.id for w in self.workers if not w.is_malicious])        
         
         if not actual_malicious: return 1.0, 0.0 # Không có tấn công
 
+        # Thu thập danh sách bị chặn từ tất cả cluster heads
+        total_blocked_mal = 0
+        total_blocked_benign = 0
+
+        total_mal_updates = 0 # Tổng số lần kẻ xấu gửi updates
+        total_benign_updates = 0 # Tổng số ng tốt gửi update
+
+        for ch in self.cluster_heads:
+            if not hasattr(ch, 'blocked_ids_this_round'): continue
+
+            blocked_set = ch.blocked_ids_this_round
+            member_ids = set(ch.members)
+
+            local_malicious = member_ids.intersection(actual_malicious)
+            local_benign = member_ids.intersection(actual_benign)
+
+            total_benign_updates += len(local_benign)
+            total_mal_updates += len(local_malicious)
+
+            total_blocked_benign += len(blocked_set.intersection(actual_benign))
+            total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+
         # TPR = TP / (TP + FN) -> Tỷ lệ node xấu bị bắt
-        tp = len(predicted_malicious.intersection(actual_malicious))
-        tpr = tp / len(actual_malicious) if actual_malicious else 0
-        
+        tpr = total_blocked_mal / total_mal_updates if total_mal_updates > 0 else 0.0
         # FPR = FP / (FP + TN) -> Tỷ lệ node tốt bị bắt nhầm
-        fp = len(predicted_malicious.intersection(actual_benign))
-        fpr = fp / len(actual_benign) if actual_benign else 0
+        fpr = total_blocked_benign / total_benign_updates if total_benign_updates > 0 else 0.0
         
         return tpr, fpr
     

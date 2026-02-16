@@ -311,6 +311,7 @@
 		</div>
 
 		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+		<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
 
 		<script>
 			let globalHistory = null;
@@ -412,23 +413,23 @@
 
 						// Nút xem chi tiết (dùng chung)
 						const actionBtn = `
-                            <td>
-                                <button class="btn btn-sm btn-outline-primary" onclick="showRoundDetails(${i})">
-                                    <i class="bi bi-eye"></i> Xem
-                                </button>
-                            </td>`;
+			                         <td>
+			                             <button class="btn btn-sm btn-outline-primary" onclick="showRoundDetails(${i})">
+			                                 <i class="bi bi-eye"></i> Xem
+			                             </button>
+			                         </td>`;
 
 						const genRow = `
-                            <tr>
-                                <td><strong>#${hist.rounds[i]}</strong></td>
-                                <td><span class="badge bg-success">${(hist.avg_acc[i] * 100).toFixed(2)}%</span></td>
-                                <td>${global_loss}</td>
-                                <td>${consensus_distance}</td>
-                                <td>${execution_time}</td>
-                                <td>${comm}</td>
-                                ${actionBtn}
-                            </tr>
-                        `;
+			                         <tr>
+			                             <td><strong>#${hist.rounds[i]}</strong></td>
+			                             <td><span class="badge bg-success">${(hist.avg_acc[i] * 100).toFixed(2)}%</span></td>
+			                             <td>${global_loss}</td>
+			                             <td>${consensus_distance}</td>
+			                             <td>${execution_time}</td>
+			                             <td>${comm}</td>
+			                             ${actionBtn}
+			                         </tr>
+			                     `;
 						genBody.innerHTML += genRow;
 
 						// 2. Dữ liệu Attack Tab
@@ -461,16 +462,16 @@
 								: "NaN";
 
 						const attRow = `
-                            <tr>
-                                <td><strong>#${hist.rounds[i]}</strong></td>
-                                <td class="text-danger fw-bold">${tpr}</td>
-                                <td class="text-warning fw-bold">${fpr}</td>
+			                         <tr>
+			                             <td><strong>#${hist.rounds[i]}</strong></td>
+			                             <td class="text-danger fw-bold">${tpr}</td>
+			                             <td class="text-warning fw-bold">${fpr}</td>
 								<td class="text-primary fw-bold">${asr}</td>
-        						<td class="text-dark fw-bold">${f1}</td>
-                                <td>${statusBadge}</td>
-                                ${actionBtn}
-                            </tr>
-                        `;
+			     						<td class="text-dark fw-bold">${f1}</td>
+			                             <td>${statusBadge}</td>
+			                             ${actionBtn}
+			                         </tr>
+			                     `;
 						attBody.innerHTML += attRow;
 					}
 				} catch (error) {
@@ -523,12 +524,12 @@
 							.map((m) => `<span class="badge bg-secondary me-1">${m}</span>`)
 							.join("");
 						const col = `
-                        <div class="col-md-6 mb-3">
-                            <div class="card h-100">
-                                <div class="card-header py-1 fw-bold bg-light">Cluster ${cluster_id}</div>
-                                <div class="card-body p-2">${memberBadges}</div>
-                            </div>
-                        </div>`;
+			                     <div class="col-md-6 mb-3">
+			                         <div class="card h-100">
+			                             <div class="card-header py-1 fw-bold bg-light">Cluster ${cluster_id}</div>
+			                             <div class="card-body p-2">${memberBadges}</div>
+			                         </div>
+			                     </div>`;
 						clusterDiv.innerHTML += col;
 					}
 				}
@@ -656,13 +657,13 @@
 
 			function createMetricCard(title, value, colorClass) {
 				return `
-        <div class="col-md-4 mb-2">
-            <div class="p-3 border rounded bg-light h-100 d-flex flex-column justify-content-center">
-                <div class="text-muted small text-uppercase fw-bold mb-1">${title}</div>
-                <div class="h3 mb-0 ${colorClass}">${value}</div>
-            </div>
-        </div>
-    `;
+			     <div class="col-md-4 mb-2">
+			         <div class="p-3 border rounded bg-light h-100 d-flex flex-column justify-content-center">
+			             <div class="text-muted small text-uppercase fw-bold mb-1">${title}</div>
+			             <div class="h3 mb-0 ${colorClass}">${value}</div>
+			         </div>
+			     </div>
+			 `;
 			}
 			function exportToExcel() {
 				// 1. Kiểm tra dữ liệu
@@ -671,78 +672,212 @@
 					!globalHistory.rounds ||
 					globalHistory.rounds.length === 0
 				) {
-					alert("Chưa có dữ liệu để xuất!");
+					alert(
+						"Chưa có dữ liệu để xuất! Vui lòng đợi chạy xong ít nhất 1 vòng.",
+					);
 					return;
 				}
 
 				const h = globalHistory;
 				const count = h.rounds.length;
+				const lastIdx = count - 1; // <--- FIX 1: Khai báo biến thiếu
 
-				// 2. Chuẩn bị Header
-				// BOM \uFEFF giúp Excel mở file UTF-8 không bị lỗi font
-				let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+				// ---------------------------------------------------------
+				// A. XỬ LÝ TÊN FILE
+				// ---------------------------------------------------------
+				const urlParams = new URLSearchParams(window.location.search);
+				const numNodes = urlParams.get("nodes") || "unknown";
+				const plannedRounds = urlParams.get("rounds") || count;
 
-				// Header cơ bản
-				let headers = [
-					"Round",
-					"Accuracy",
-					"Loss",
-					"Consensus Dist",
-					"Comm Cost",
-					"Latency",
-					"System Mode",
+				let algoName = "Unknown";
+				if (h.system_mode && h.system_mode[lastIdx])
+					algoName = h.system_mode[lastIdx];
+
+				// Xác định kịch bản tấn công
+				let attackName = "Normal";
+				let isAttackScenario = false;
+
+				// Ưu tiên lấy từ field attack_type
+				if (
+					h.attack_type &&
+					h.attack_type[lastIdx] &&
+					h.attack_type[lastIdx] !== "NONE"
+				) {
+					attackName = h.attack_type[lastIdx];
+					isAttackScenario = true;
+				}
+				// Fallback: Đoán dựa trên metrics nếu attack_type chưa cập nhật
+				else if (h.avg_mse && h.avg_mse[lastIdx] > 0) {
+					attackName = "Gauss";
+					isAttackScenario = true;
+				} else if (h.asr && h.asr[lastIdx] > 0) {
+					attackName = "LabelFlipping";
+					isAttackScenario = true;
+				}
+
+				const timestamp = new Date()
+					.toISOString()
+					.replace(/[:.]/g, "-")
+					.slice(0, 19);
+				let fileName = "";
+
+				if (isAttackScenario) {
+					fileName = `bcfl_metrics_${timestamp}_${attackName}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+				} else {
+					fileName = `bcfl_metrics_${timestamp}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+				}
+
+				// ---------------------------------------------------------
+				// B. ĐỊNH NGHĨA CẤU TRÚC CỘT (Đảm bảo Header & Data luôn khớp)
+				// ---------------------------------------------------------
+
+				// Helper: Hàm bọc dấu ngoặc kép để tránh lỗi CSV khi dữ liệu có dấu phẩy
+				const safeStr = (val) => {
+					if (val === null || val === undefined) return "";
+					const str = String(val);
+					// Nếu có dấu phẩy, xuống dòng hoặc ngoặc kép thì phải bọc lại
+					if (str.includes(",") || str.includes("\n") || str.includes('"')) {
+						return `"${str.replace(/"/g, '""')}"`;
+					}
+					return str;
+				};
+
+				// Danh sách các cột cơ bản
+				let columns = [
+					{ header: "Round", val: (i) => h.rounds[i] },
+					{ header: "Accuracy", val: (i) => (h.avg_acc ? h.avg_acc[i] : "") },
+					{
+						header: "Loss",
+						val: (i) =>
+							h.global_loss
+								? h.global_loss[i]
+								: h.avg_loss
+									? h.avg_loss[i]
+									: "",
+					},
+					{
+						header: "Consensus Dist",
+						val: (i) =>
+							h.consensus_distance
+								? h.consensus_distance[i]
+								: h.consensus_error
+									? h.consensus_error[i]
+									: "",
+					},
+					{
+						header: "Comm Traffic (MB)",
+						val: (i) =>
+							h.comm_traffic_mb && h.comm_traffic_mb[i] != null
+								? h.comm_traffic_mb[i]
+								: "0",
+					},
+					{
+						header: "Comm Cost",
+						val: (i) => (h.comm_cost ? h.comm_cost[i] : "0"),
+					},
+					{
+						header: "Latency (s)",
+						val: (i) =>
+							h.execution_time
+								? h.execution_time[i]
+								: h.latency
+									? h.latency[i]
+									: "",
+					},
+					{
+						header: "System Mode",
+						val: (i) => (h.system_mode ? h.system_mode[i] : "BASELINE"),
+					},
 				];
 
-				// Kiểm tra xem các metrics tấn công có dữ liệu không (để thêm cột tương ứng)
-				// Logic: Kiểm tra mảng tồn tại VÀ có ít nhất 1 giá trị khác 0/null
+				// Kiểm tra dữ liệu tấn công để thêm cột động
 				const hasMSE = h.avg_mse && h.avg_mse.some((v) => v != null && v !== 0);
 				const hasASR = h.asr && h.asr.some((v) => v != null && v !== 0);
 				const hasRec =
 					h.src_recall && h.src_recall.some((v) => v != null && v !== 0);
 				const hasPre =
 					h.tgt_precision && h.tgt_precision.some((v) => v != null && v !== 0);
+				const hasTPR = h.tpr && h.tpr.some((v) => v != null && v !== 0);
+				const hasMIA =
+					h.privacy_attack_acc && h.privacy_attack_acc.some((v) => v != null);
+				const hasGIA = h.recon_mse && h.recon_mse.some((v) => v != null);
 
-				// Thêm header động
-				if (hasMSE) headers.push("Avg MSE");
-				if (hasASR) headers.push("ASR");
-				if (hasRec) headers.push("Src Recall");
-				if (hasPre) headers.push("Tgt Precision");
-
-				csvContent += headers.join(",") + "\r\n";
-
-				// 3. Duyệt vòng lặp để lấy dữ liệu từng dòng
-				for (let i = 0; i < count; i++) {
-					let row = [];
-
-					// Data cơ bản
-					row.push(h.rounds[i]);
-					row.push(h.avg_acc ? h.avg_acc[i] : "");
-					row.push(h.global_loss ? h.global_loss[i] : ""); // Lưu ý: JSON bạn gửi key là avg_loss, không phải global_loss
-					row.push(h.consensus_distance ? h.consensus_distance[i] : "");
-					row.push(h.comm_cost ? h.comm_cost[i] : "");
-					row.push(h.execution_time ? h.execution_time[i] : "");
-					row.push(h.system_mode ? h.system_mode[i] : "BASELINE");
-
-					// Data tấn công (Phải khớp thứ tự Header)
-					if (hasMSE) row.push(h.avg_mse ? h.avg_mse[i] : "");
-					if (hasASR) row.push(h.asr ? h.asr[i] : "");
-					if (hasRec) row.push(h.src_recall ? h.src_recall[i] : "");
-					if (hasPre) row.push(h.tgt_precision ? h.tgt_precision[i] : "");
-
-					csvContent += row.join(",") + "\r\n";
+				if (hasMSE) {
+					columns.push({
+						header: "Avg MSE",
+						val: (i) => (h.avg_mse ? h.avg_mse[i] : ""),
+					});
+					columns.push({
+						header: "Poisoned Loss",
+						val: (i) => (h.avg_loss ? h.avg_loss[i] : ""),
+					});
+				}
+				if (hasASR) {
+					columns.push({ header: "ASR", val: (i) => (h.asr ? h.asr[i] : "") });
+					columns.push({
+						header: "Clean Acc",
+						val: (i) => (h.clean_acc ? h.clean_acc[i] : ""),
+					});
+				}
+				if (hasRec)
+					columns.push({
+						header: "Src Recall",
+						val: (i) => (h.src_recall ? h.src_recall[i] : ""),
+					});
+				if (hasPre)
+					columns.push({
+						header: "Tgt Precision",
+						val: (i) => (h.tgt_precision ? h.tgt_precision[i] : ""),
+					});
+				if (hasTPR) {
+					columns.push({ header: "TPR", val: (i) => (h.tpr ? h.tpr[i] : "") });
+					columns.push({ header: "FPR", val: (i) => (h.fpr ? h.fpr[i] : "") });
+				}
+				if (hasMIA) {
+					columns.push({
+						header: "MIA Attack Acc",
+						val: (i) => (h.privacy_attack_acc ? h.privacy_attack_acc[i] : ""),
+					});
+					columns.push({
+						header: "MIA AUC",
+						val: (i) => (h.privacy_auc ? h.privacy_auc[i] : ""),
+					});
+					columns.push({
+						header: "MIA Advantage",
+						val: (i) => (h.privacy_advantage ? h.privacy_advantage[i] : ""),
+					});
 				}
 
-				// 4. Tải file
+				if (hasGIA) {
+					columns.push({
+						header: "GIA MSE (Recon)",
+						val: (i) => (h.recon_mse ? h.recon_mse[i] : ""),
+					});
+					columns.push({
+						header: "GIA PSNR (dB)",
+						val: (i) => (h.recon_psnr ? h.recon_psnr[i] : ""),
+					});
+				}
+				// ---------------------------------------------------------
+				// C. TẠO NỘI DUNG CSV
+				// ---------------------------------------------------------
+				let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+
+				// 1. Ghi Header
+				csvContent +=
+					columns.map((col) => safeStr(col.header)).join(",") + "\r\n";
+
+				// 2. Ghi Data
+				for (let i = 0; i < count; i++) {
+					let rowData = columns.map((col) => safeStr(col.val(i)));
+					csvContent += rowData.join(",") + "\r\n";
+				}
+
+				// 3. Tải file
 				const encodedUri = encodeURI(csvContent);
 				const link = document.createElement("a");
 				link.setAttribute("href", encodedUri);
-
-				// Tạo tên file có timestamp
-				const timestamp = new Date()
-					.toISOString()
-					.replace(/[:.]/g, "-")
-					.slice(0, 19);
-				link.setAttribute("download", `bcfl_metrics_${timestamp}.csv`);
+				link.setAttribute("download", fileName);
 
 				document.body.appendChild(link);
 				link.click();
