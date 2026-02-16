@@ -20,9 +20,6 @@ from app.blockchain.node_manager import NodeManager
 app = Flask(__name__)
 
 # Khởi tạo hệ thống giả lập
-# workers = [WorkerNode(i, None) for i in range(Config.NUM_WORKERS)]
-# cluster_heads = [ClusterHead(i) for i in range(Config.NUM_CLUSTERS)]
-# blockchain = Blockchain()
 engine = SimulationEngine()
 
 

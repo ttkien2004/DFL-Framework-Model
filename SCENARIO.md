@@ -217,3 +217,33 @@ curl -X POST http://localhost:5000/run_round \
     "learning_rate": 0.01
 }
 ```
+
+## Run GIA Scenario Experiment:
+
+```bash
+{
+  "system_mode": "ATTACK",          // Chế độ tấn công
+  "attack_type": "GIA",             // Tên kịch bản: GIA hoặc GRADIENT_INVERSION
+  "num_workers": 10,                // Tổng số worker
+  "malicious_ratio": 0.1,           // Tỷ lệ kẻ tấn công (thường GIA chỉ cần 1 kẻ nghe lén)
+  "target_rounds": 10,              // Số vòng chạy
+
+  // --- THAM SỐ RIÊNG CHO GIA ---
+  "gia_iterations": 300,            // Số vòng lặp tối ưu hóa (L-BFGS steps) để tái tạo ảnh
+  "gia_lr": 0.1                     // Learning Rate của quá trình tái tạo
+}
+```
+
+## Run MIA Scenario Experiment
+
+```bash
+{
+  "system_mode": "ATTACK",
+  "attack_type": "MIA",
+  "malicious_ratio": 0.1,  // Tỷ lệ kẻ tấn công (đóng vai trò kẻ nghe lén)
+
+  // --- THAM SỐ RIÊNG CHO MIA ---
+  "mia_subset_size": 1000, // Số lượng mẫu dữ liệu dùng để test (Member vs Non-member)
+  "tau": null              // Ngưỡng quyết định (null = Tự động tìm, hoặc số float)
+}
+```

@@ -37,6 +37,8 @@ class ScenarioExperiment4(BaseScenario):
             self._setup_model_poisoning(workers, malicious_indices)
         elif attack_type == 'MIA':
             self._setup_mia(workers, malicious_indices)
+        elif attack_type in ['GIA', 'GRADIENT_INVERSION']:
+            self._setup_gradient_inversion(workers, malicious_indices)
         else:
             print(f"Warning: Unknown attack type '{attack_type}'. No attack applied.")
     
@@ -132,7 +134,7 @@ class ScenarioExperiment4(BaseScenario):
     def _setup_mia(self, workers, mal_indices):
         attack_config = {
             'dataset': self.config.get('dataset', 'cifar10'),
-            'mia_subset_size': 1000,
+            'mia_subset_size': self.config.get('mia_subset_size', 1000),
             'tau': self.config.get('tau', None)
         }
         for idx in mal_indices:
@@ -180,3 +182,21 @@ class ScenarioExperiment4(BaseScenario):
         
         for idx in malicious_indices:
             workers[idx].attack_strategy = strategy
+    
+    def _setup_gradient_inversion(self, workers, malicious_indices):
+        """
+        Cấu hình tấn công Gradient Inversion.
+        """
+        print(f"Strategy: Gradient Inversion Attack (Reconstructing inputs from gradients)")
+        
+        # Config cho GIA
+        gia_config = {
+            'gia_iterations': self.config.get('gia_iterations', 300),  # Số vòng lặp tối ưu
+            'gia_lr': self.config.get('gia_lr', 0.1)           # Learning rate cho L-BFGS
+        }
+        
+        for idx in malicious_indices:
+            # Gán chiến lược tấn công cho worker
+            # Lưu ý: Worker này sẽ đóng vai kẻ tấn công, nghe lén và tái tạo ảnh            
+            workers[idx].attack_strategy = AttackFactory.get_strategy('GIA', gia_config)
+            print(f"   -> Worker {workers[idx].id} is set as Eavesdropper/Attacker")

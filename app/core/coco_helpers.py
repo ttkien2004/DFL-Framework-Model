@@ -188,3 +188,48 @@ class CoCo:
             A_prime[j, i] = 1
             
         return A, r_old, t_old, False
+    
+    @staticmethod
+    def optimize_network(workers, coco_state):
+        """
+        Hàm điều phối chính: Thực hiện toàn bộ quy trình tối ưu CoCo.
+        Input: Danh sách workers, Trạng thái CoCo hiện tại.
+        Output: Trạng thái mới, Flag improved, Metrics.
+        """
+        print("   [CoCo] Optimizing Topology & Compression...")
+        n = len(workers)
+        state = coco_state
+        id_to_idx = {w.id: i for i, w in enumerate(workers)}
+
+        # 1. Thu thập Model
+        valid_models = {w.id: w.model.state_dict() for w in workers}
+
+        # 2. Tính toán Ma trận khoảng cách & D_max
+        D_matrix = CoCo.calculate_distance_matrix(valid_models, id_to_idx)
+        state['D_max'] = CoCo.calculate_d_max(valid_models, state['D_max'])
+
+        # 3. Thu thập thông tin băng thông
+        b_out = [w.b_out for w in workers]
+        b_in = [w.b_in for w in workers]
+        model_size_mb = workers[0].model_size_mb if workers else 1.2
+
+        # 4. Tìm các liên kết chậm nhất
+        slow_links = CoCo.select_slowest_links(
+            state['A'], state['r'], b_out, b_in, D_matrix, 
+            s=5, n=n, B=model_size_mb
+        )
+
+        # 5. Chạy thuật toán ADJUSTCR
+        A_new, r_new, t_new, improved = CoCo.ADJUSTCR(
+            state['A'], slow_links, D_matrix, n, 
+            state['D_max'], model_size_mb, b_out, b_in, 
+            state['t_prev'], state['r']
+        )
+
+        # 6. Cập nhật State nếu cải thiện
+        if improved:
+            state['A'] = A_new
+            state['r'] = r_new
+            state['t_prev'] = t_new
+        
+        return state, improved, t_new

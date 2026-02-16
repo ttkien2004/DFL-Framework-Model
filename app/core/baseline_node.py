@@ -1,6 +1,7 @@
 import copy
 from app.core.worker import WorkerNode
 from app.core.baseline_aggregation import AggregationAlgorithms
+from app.utils.helpers import get_model_size_mb
 
 class StandardDFLNode(WorkerNode):
     """
@@ -16,11 +17,18 @@ class StandardDFLNode(WorkerNode):
         self.neighbors = [] # Danh sách hàng xóm cố định
         self.received_updates = {}
 
+        import random
+        self.b_out = random.uniform(10, 50)
+        self.b_in = random.uniform(20, 100)
+        self.compression_ratio = 1.0
+        self.model_size_mb = 1.2
+
     def set_neighbors(self, neighbor_indices):
         """Thiết lập Topology cố định"""
         self.neighbors = neighbor_indices
+    
 
-    def aggregate(self):
+    def aggregate(self, current_round_id=0):
         """
         Tổng hợp mô hình từ hàng xóm sử dụng thuật toán được cấu hình.
         """
@@ -79,12 +87,12 @@ class StandardDFLNode(WorkerNode):
             else:
                 aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
         elif algo_name == "BALANCE":
-            gamma = self.config("BALANCE_GAMMA", 0.3)
+            gamma = self.config.get("BALANCE_GAMMA", 0.3)
             lambda_val = self.config.get("BALANCE_LAMBDA",1.0)
             total_rounds = self.config.get("NUM_ROUNDS", 100)
             aggregated_model = AggregationAlgorithms.balance(
                 updates=valid_updates,
-                current_round=self.current_round,
+                current_round=current_round_id+1,
                 total_rounds=total_rounds,
                 gamma=gamma,
                 lambda_val=lambda_val
@@ -99,3 +107,36 @@ class StandardDFLNode(WorkerNode):
         self.received_updates = {}
         
         return aggregated_model
+    
+    def apply_coco_config(self, neighbors, compression_rate):
+        self.neighbors = neighbors
+        self.compression_ratio = compression_rate
+    
+    def gossip(self, all_workers_dict, is_coco_mode=False):
+        payload = self.model.state_dict()
+        sent_count = 0
+        max_latency = 0.0
+
+        # Tính kích thước gốc
+        original_size_mb = get_model_size_mb(self.model)
+        # Nếu chạy CoCo, áp dụng tỷ lệ nén r
+        actual_size_mb = original_size_mb * (self.compression_rate if is_coco_mode else 1.0)
+
+        for neighbor_id in self.neighbors:
+            neighbor = all_workers_dict.get(neighbor_id)
+            if neighbor:
+                # Gửi model
+                neighbor.received_updates[self.id] = copy.deepcopy(payload)
+                sent_count += 1
+
+                # Tính latency (chỉ quan trọng nếu chạy CoCo để đo đạc)
+                if is_coco_mode:
+                    # Time = (r * Size) / min(BW_upload, BW_download)
+                    # Chuyển đổi Mbps -> MBps bằng cách chia 8
+                    bw = min(self.b_out, neighbor.b_in)
+                    if bw > 0:
+                        latency = (self.compression_rate * self.model_size_mb) / (bw / 8.0)
+                        if latency > max_latency:
+                            max_latency = latency
+        traffic_mb = sent_count * actual_size_mb
+        return sent_count, max_latency, traffic_mb
