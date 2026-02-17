@@ -15,6 +15,7 @@ from collections import defaultdict
 import time
 
 from app.blockchain.node_manager import NodeManager
+import argparse
 
 
 app = Flask(__name__)
@@ -106,4 +107,9 @@ def dashboard_view():
     return render_template('dashboard.html')
 
 if __name__ == '__main__':
-    app.run(host=Config.HOST, port=Config.PORT, debug=Config.DEBUG)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=3000)
+    args = parser.parse_args()
+
+    PORT = args.port
+    app.run(host=Config.HOST, port=PORT, debug=Config.DEBUG)
