@@ -16,6 +16,8 @@ import time
 
 from app.blockchain.node_manager import NodeManager
 import argparse
+import threading
+import sys
 
 
 app = Flask(__name__)
@@ -106,10 +108,101 @@ def get_metrics():
 def dashboard_view():
     return render_template('dashboard.html')
 
+# Biến theo dõi trạng thái
+training_status = {
+    "is_running": False,
+    "current_round": 0,
+    "total_rounds": 0,
+    "message": "Idle"
+}
+
+# --- HÀM LOGIC CHẠY VÒNG LẶP TRONG BACKGROUND ---
+def training_loop(total_rounds, req_data):
+    global training_status, history, blockchain
+    
+    with app.app_context(): # Đảm bảo context cho Flask nếu cần truy cập DB/Config
+        try:
+            training_status["is_running"] = True
+            training_status["total_rounds"] = total_rounds
+            
+            # 1. Khởi tạo lại hệ thống (Reset)
+            requested_mode = req_data.get('system_mode', 'PROPOSED').upper()
+            print(f"[Training Loop] Starting {total_rounds} rounds for {requested_mode}...")
+            
+            engine.initialize_system(req_data)
+            
+            # Reset history
+            history = defaultdict(list)
+            
+            if requested_mode == "PROPOSED":
+                blockchain = engine.blockchain
+            else:
+                blockchain = None # Baseline không có blockchain
+            
+            # 2. Vòng lặp Training
+            for r in range(total_rounds):
+                training_status["current_round"] = r + 1
+                training_status["message"] = f"Running round {r+1}/{total_rounds}..."
+                
+                # Gọi engine để chạy 1 vòng
+                result = engine.run_round(r, req_data)
+                
+                # Cập nhật History
+                update_history_dynamic(history, r, result, requested_mode)
+                
+                if blockchain is not None and blockchain.chain is not None:
+                    history['blockchain_height'].append(len(blockchain.chain))
+                
+                print(f" -> Round {r+1} finished. Acc: {result.get('accuracy', 0):.4f}")
+
+            training_status["message"] = "Completed"
+            
+        except Exception as e:
+            print(f"[Training Error] {str(e)}")
+            training_status["message"] = f"Error: {str(e)}"
+        finally:
+            training_status["is_running"] = False
+
+# --- API MỚI: BẮT ĐẦU TRAINING ---
+@app.route('/start_training', methods=['POST'])
+def start_training():
+    if training_status["is_running"]:
+        return jsonify({"status": "error", "message": "Training is already running!"}), 400
+
+    req_data = request.json
+    # Lấy số vòng từ request (do JS gửi lên)
+    # Lưu ý: JS cần gửi key "target_rounds" hoặc "rounds"
+    total_rounds = int(req_data.get("target_rounds", 10))
+    print(req_data, Config.NUM_CLUSTERS, "WTF", flush=True)
+    # print(total_rounds, "CLGV", flush=True)
+    # print(f"DEBUG: Total Rounds nhận được = {total_rounds} | CLGV", file=sys.stderr)
+    
+    # Chạy thread ngầm
+    thread = threading.Thread(
+        target=training_loop,
+        args=(total_rounds, req_data),
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({"status": "started", "message": "Training started in background"})
+
+# --- API MỚI: KIỂM TRA TRẠNG THÁI ---
+@app.route('/training_status', methods=['GET'])
+def get_training_status():
+    return jsonify(training_status)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=3000)
+    parser.add_argument(
+        "--nc",
+        type=int,
+        default=Config.NUM_CLUSTERS,
+        help="Số lượng cluster (K)"
+    )
     args = parser.parse_args()
 
     PORT = args.port
-    app.run(host=Config.HOST, port=PORT, debug=Config.DEBUG)
+    Config.NUM_CLUSTERS = args.nc
+    app.run(host=Config.HOST, port=PORT, debug=False, use_reloader=False)

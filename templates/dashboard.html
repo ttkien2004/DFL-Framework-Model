@@ -689,6 +689,7 @@
 				console.log(urlParams, "URL Params");
 				const numNodes = urlParams.get("nodes") || "unknown";
 				const plannedRounds = urlParams.get("rounds") || count;
+				const non_iid_alpha = urlParams.get("non_iid_alpha") || 0.5;
 
 				let algoName = "Unknown";
 				if (h.system_mode && h.system_mode[lastIdx])
@@ -725,7 +726,7 @@
 				if (isAttackScenario) {
 					fileName = `bcfl_metrics_${timestamp}_${attackName}_${plannedRounds}rounds_${algoName}_${numNodes}.csv`;
 				} else {
-					fileName = `bcfl_metrics_${timestamp}_${plannedRounds}rounds_${algoName}_${numNodes}.csv`;
+					fileName = `bcfl_metrics_${timestamp}_${non_iid_alpha}noniid_${plannedRounds}rounds_${algoName}_${numNodes}.csv`;
 				}
 
 				// ---------------------------------------------------------

@@ -57,14 +57,14 @@ class Config:
     DECAY_FACTOR = 0.99              # Hệ số giảm dần theo thời gian (để khuyến khích đóng góp liên tục)
 
     # BALANCE
-    BALANCE_GAMMA = 0.3
-    BALANCE_BETA = 0.5
-    BALANCE_LAMBDA = 1.0
-    BALANCE_Q0 = 0.01
+    BALANCE_GAMMA = 1.5
+    BALANCE_BETA = 1.2
+    BALANCE_LAMBDA = 0.5
+    BALANCE_Q0 = 1.0
 
     # LDP Config
     # Local Differential Privacy (LDP)
-    ENABLE_LDP = False        # Bật/Tắt LDP
+    ENABLE_LDP = True        # Bật/Tắt LDP
     LDP_EPSILON = 5.0        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
     LDP_CLIPPING_THRESHOLD = 0.1
     LDP_SIGMA = 5.0 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
@@ -76,4 +76,4 @@ class Config:
 
     # Cấu hình của Secret Sharing và VIEW-CHANGE
     T_THRESHOLD = 2
-    VC_MAX_RETRIES = 2
+    VC_MAX_RETRIES = 3
