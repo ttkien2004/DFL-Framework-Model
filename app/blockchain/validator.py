@@ -43,7 +43,7 @@ class Validator(WorkerNode):
             # --- FIX: TÁI CÂN CHỈNH BATCH NORM ---
             # Chạy khoảng 10-20 batches dữ liệu để model "làm quen" và sửa lại stats
             # Lưu ý: val_loader ở đây nên có shuffle=True để thống kê tốt hơn
-            self._recalibrate_bn(val_loader, num_batches=20)
+            # self._recalibrate_bn(val_loader, num_batches=20)
             # -------------------------------------
 
             # 4. Đánh giá (Eval mode)

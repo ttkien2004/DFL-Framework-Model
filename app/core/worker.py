@@ -136,7 +136,7 @@ class WorkerNode:
                     
             return total_loss / total_samples if total_samples > 0 else float('inf')
         finally:
-            self.mode.to('cpu')
+            self.model.to('cpu')
 
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
@@ -271,7 +271,7 @@ class WorkerNode:
         # 3. Lấy tham số LDP
         clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
         sigma = LDP.get_ldp_sigma()
-        # print(f"Sigma applied in LDP for model: {sigma}")
+        print(f"Sigma applied in LDP for model: {sigma}")
         
         # 4. Tính L2 Norm của các phần tử Top-k (Chuẩn DP-SGD)
         sparse_norm_sq = 0.0
@@ -319,6 +319,13 @@ class WorkerNode:
         train_loss = None
         # Trước khi train: Đẩy model lên GPU
         self.model = self.model.to(self.device)
+        # Khởi tạo lại Optimizer ở mỗi vòng để xóa sạch Momentum cũ
+        self.optimizer = torch.optim.SGD(
+            self.model.parameters(), 
+            lr=Config.LEARNING_RATE, # Lấy 0.001 từ config của bạn
+            momentum=0.9,
+            weight_decay=1e-4 
+        )
         # BƯỚC 2: Thực hiện Training hoặc Tấn công
         try:
             if self.attack_strategy.is_malicious:
@@ -345,7 +352,7 @@ class WorkerNode:
 
                 # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
                 # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
-                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.05)
+                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.01)
 
                 # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
                 
@@ -868,35 +875,38 @@ class WorkerNode:
                 print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
                 return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
 
+        self.model.to(self.device)
         self.model.eval()
         test_loss = 0.0
         correct = 0
         total_samples = 0
-        
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                
-                # Forward
-                logits = self.model(data)
-                
-                # 1. Tính Accuracy
-                pred = logits.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                
-                # 2. Tính Loss (CrossEntropy)
-                # Kỹ thuật chuẩn: Nhân loss của batch với số lượng sample trong batch đó
-                loss = self.criterion(logits, target)
-                test_loss += loss.item() * data.size(0) 
-                
-                total_samples += data.size(0)
+        try:
+            with torch.no_grad():
+                for data, target in test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    
+                    # Forward
+                    logits = self.model(data)
+                    
+                    # 1. Tính Accuracy
+                    pred = logits.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    
+                    # 2. Tính Loss (CrossEntropy)
+                    # Kỹ thuật chuẩn: Nhân loss của batch với số lượng sample trong batch đó
+                    loss = self.criterion(logits, target)
+                    test_loss += loss.item() * data.size(0) 
+                    
+                    total_samples += data.size(0)
 
-        # Tổng hợp kết quả
-        avg_loss = test_loss / total_samples if total_samples > 0 else 0.0
-        accuracy = correct / total_samples if total_samples > 0 else 0.0
-        
-        return {
-            "accuracy": accuracy,
-            "error_rate": 1.0 - accuracy,
-            "loss": avg_loss
-        }
+            # Tổng hợp kết quả
+            avg_loss = test_loss / total_samples if total_samples > 0 else 0.0
+            accuracy = correct / total_samples if total_samples > 0 else 0.0
+            
+            return {
+                "accuracy": accuracy,
+                "error_rate": 1.0 - accuracy,
+                "loss": avg_loss
+            }
+        finally:
+            self.model.to('cpu')

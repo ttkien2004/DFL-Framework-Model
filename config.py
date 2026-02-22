@@ -32,7 +32,7 @@ class Config:
     ENABLE_ENCRYPTION = False # (Giai đoạn sau)
 
     # --- 5. Cấu hình Blockchain & Đồng thuận ---
-    COMMITTEE_SIZE = 3       # Số lượng thành viên trong ủy ban
+    COMMITTEE_SIZE = 4       # Số lượng thành viên trong ủy ban
     CONSENSUS_THRESHOLD = 0.66 # Tỷ lệ phiếu bầu cần thiết (2/3)
     MIN_REPUTATION = 50.0    # Điểm uy tín tối thiểu để được làm Block Leader
     
@@ -64,16 +64,16 @@ class Config:
 
     # LDP Config
     # Local Differential Privacy (LDP)
-    ENABLE_LDP = False        # Bật/Tắt LDP
+    ENABLE_LDP = True        # Bật/Tắt LDP
     LDP_EPSILON = 5.0        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
-    LDP_CLIPPING_THRESHOLD = 0.1
-    LDP_SIGMA = 5.0 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
+    LDP_CLIPPING_THRESHOLD = 1.0
+    LDP_SIGMA = 0.1 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
     LDP_DELTA = 1e-5
     WEIGHT_DECAY = 1e-4
 
     # Ngưỡng đánh giá của Ủy ban
-    ACC_THRESHOLD = 30.0   # k
+    ACC_THRESHOLD = 10.0   # k
 
     # Cấu hình của Secret Sharing và VIEW-CHANGE
-    T_THRESHOLD = 2
-    VC_MAX_RETRIES = 2
+    T_THRESHOLD = COMMITTEE_SIZE - 1
+    VC_MAX_RETRIES = COMMITTEE_SIZE
