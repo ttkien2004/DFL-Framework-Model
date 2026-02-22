@@ -34,7 +34,8 @@ class Validator(WorkerNode):
 
         # 2. BACKUP Model hiện tại
         original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
-
+        # Đẩy lên GPU
+        self.model.to(self.device)
         try:
             # 3. Load model cần chấm điểm
             self.model.load_state_dict(model_state_dict)
@@ -88,6 +89,10 @@ class Validator(WorkerNode):
         finally:
             # 5. HOÀN TRẢ lại model cũ
             self.model.load_state_dict(original_state)
+            self.model = self.model.to('cpu')
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def get_public_key(self):
         return self.public_key

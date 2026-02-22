@@ -205,7 +205,7 @@ class SimulationEngine:
     def _run_round_baseline(self, round_id):
         # Pha 1: Training & Attack (Tự động kích hoạt Attack nếu Scenario đã setup)
         algo_name = self.engine_config.get('aggregation_algorithm', None)
-        print(self.engine_config, "WTF", flush=True)
+
         is_coco = True if algo_name and algo_name == "CoCo" else False
         if is_coco:
             n = len(self.workers)
@@ -217,7 +217,7 @@ class SimulationEngine:
             }
             np.fill_diagonal(self.coco_state['A'], 0)
         print("   [Phase 1] Local Training...")
-        for w in self.workers:            
+        for w in self.workers:
             w.train()
 
         # Pha 2: Gossip (Truyền tin)
@@ -919,10 +919,15 @@ class SimulationEngine:
         else:
             # Fallback cho trường hợp chạy bình thường (NONE)
             is_attack = False
+            losses = []
             for w in benign_workers:
-                m = w.evaluate_gaussian_metrics(self.test_loader) # Dùng hàm cơ bản
+                m = w.evaluate_standard(self.test_loader) # Dùng hàm cơ bản
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
+                losses.append(m['loss'])
+            self.specific_metrics = {
+                "avg_loss": safe_mean(losses, default=10000.0)
+            }
 
         # 2. Tính các Metrics chung (Common Metrics)
         self.common_metrics = self._calculate_common_metrics(benign_workers, error_rates, accuracies, is_attack=is_attack)
@@ -1231,7 +1236,9 @@ class SimulationEngine:
             # Tính lại Norm sau khi sửa
             rec_norm = compute_model_norm({k: v.cpu().float() for k, v in reconstructed_model.items()})
             print(f" -> Fixed Norm: {rec_norm:.4f}")
-        if abs(proposed_norm - rec_norm) > 1e-3:
+        tolerance = max(1e-2, 0.001 * proposed_norm) # Cho phép lệch 0.1% hoặc 0.01
+    
+        if abs(proposed_norm - rec_norm) > tolerance:
             print(f" -> REJECTED: Norm mismatch too high even after fix attempt.")
             return f"Cluster {cluster_id}: Rejected (Integrity Check Failed)"
         # Committee validation

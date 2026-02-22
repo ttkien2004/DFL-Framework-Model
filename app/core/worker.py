@@ -28,7 +28,7 @@ class WorkerNode:
             self.dataset_name, self.id, num_workers, self.batch_size
         )
         model_name = config.get('model', 'simple_cnn')
-        self.model = get_model(model_name, num_classes=self.num_classes).to(self.device)
+        self.model = get_model(model_name, num_classes=self.num_classes).to('cpu') # Để model ban đầu gán cho 'cpu', khi train chuyển về 'gpu'
 
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
         self.cluster_head_id = None
@@ -118,22 +118,25 @@ class WorkerNode:
     def evaluate_loss_on_model(self, model_state):
         """Bước 1: Tính Loss để chọn cụm, (DFCA)"""
         self.model.load_state_dict(model_state) # load learned weights of model
+        self.model.to(self.device)
         self.model.eval()
         
         total_loss = 0.0
         total_samples = 0
         loss_fn = torch.nn.CrossEntropyLoss()
-        
-        with torch.no_grad():
-            for X, y in self.data_loader:
-                X, y = X.to(self.device), y.to(self.device)
-                preds = self.model(X)
-                loss = loss_fn(preds, y) 
-                
-                total_loss += loss.item() * X.size(0)
-                total_samples += X.size(0)
-                
-        return total_loss / total_samples if total_samples > 0 else float('inf')
+        try:
+            with torch.no_grad():
+                for X, y in self.data_loader:
+                    X, y = X.to(self.device), y.to(self.device)
+                    preds = self.model(X)
+                    loss = loss_fn(preds, y) 
+                    
+                    total_loss += loss.item() * X.size(0)
+                    total_samples += X.size(0)
+                    
+            return total_loss / total_samples if total_samples > 0 else float('inf')
+        finally:
+            self.mode.to('cpu')
 
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
@@ -180,58 +183,122 @@ class WorkerNode:
     #             "loss": loss
     #         }
         # return self.attack_strategy.execute(self)
-    def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
+    # def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
+    #     """
+    #     LDP dạng thưa (Sparse LDP):
+    #     Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
+    #     Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
+    #     """
+    #     if not Config.ENABLE_LDP:
+    #         return delta
+
+    #     noisy_delta = {}
+        
+    #     # 1. Tính toán ngưỡng Top-k
+    #     all_values = []
+    #     for v in delta.values():
+    #         if v.dtype in [torch.float, torch.float32]:
+    #             all_values.append(v.view(-1).abs())
+        
+    #     if not all_values: return delta
+        
+    #     full_vec = torch.cat(all_values)
+    #     total_params = full_vec.numel()
+    #     k = int(total_params * sparsity)
+    #     if k < 1: k = 1
+        
+    #     # Tìm giá trị ngưỡng (threshold) để lọt vào top k
+    #     top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
+
+    #     # 2. Lấy Sigma và Clipping Threshold
+    #     # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
+    #     clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
+    #     sigma = LDP.get_ldp_sigma()
+    #     print(f"SIgma applied in LDP for model: {sigma}")
+        
+    #     # 3. Áp dụng Mask & Noise
+    #     for k, v in delta.items():
+    #         if v.dtype not in [torch.float, torch.float32]:
+    #             noisy_delta[k] = v
+    #             continue
+
+    #         # Mask: 1 nếu thuộc Top-k, 0 nếu không
+    #         mask = (v.abs() >= top_k_threshold).float()
+            
+    #         # Clipping: Cắt update trong khoảng [-C, C]
+    #         # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
+    #         clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
+            
+    #         # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
+    #         noise = torch.normal(0, sigma, v.shape, device=self.device)
+            
+    #         # Update mới = (Clipped_Update + Noise) * Mask
+    #         # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
+    #         noisy_delta[k] = (clipped_v + noise) * mask
+            
+    #     return noisy_delta
+    def apply_ldp_sparse(self, delta, sparsity=0.01):
         """
-        LDP dạng thưa (Sparse LDP):
-        Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
-        Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
+        LDP dạng thưa (Sparse LDP) - Phiên bản Hợp nhất (Unified)
+        Hoạt động an toàn cho cả SimpleCNN (không BN) và VGG/ResNet (có BN).
         """
         if not Config.ENABLE_LDP:
             return delta
 
         noisy_delta = {}
+        trainable_keys = []
         
-        # 1. Tính toán ngưỡng Top-k
-        all_values = []
-        for v in delta.values():
-            if v.dtype in [torch.float, torch.float32]:
-                all_values.append(v.view(-1).abs())
-        
-        if not all_values: return delta
+        # 1. BỘ LỌC THÔNG MINH (Bỏ qua BatchNorm stats & non-floats)
+        for k, v in delta.items():
+            # Nếu là SimpleCNN, điều kiện 'running' sẽ false -> lọt vào else an toàn
+            if 'running' in k or 'num_batches' in k or v.dtype not in [torch.float, torch.float32]:
+                noisy_delta[k] = v  # Giữ nguyên, không cộng nhiễu
+            else:
+                trainable_keys.append(k)
+
+        # 2. Tính toán ngưỡng Top-k
+        all_values = [delta[k].view(-1).abs() for k in trainable_keys]
+        if not all_values: 
+            return noisy_delta
         
         full_vec = torch.cat(all_values)
         total_params = full_vec.numel()
-        k = int(total_params * sparsity)
-        if k < 1: k = 1
+        k = max(1, int(total_params * sparsity))
         
-        # Tìm giá trị ngưỡng (threshold) để lọt vào top k
+        # Tìm giá trị ngưỡng (threshold)
         top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
 
-        # 2. Lấy Sigma và Clipping Threshold
-        # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
+        # 3. Lấy tham số LDP
         clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
         sigma = LDP.get_ldp_sigma()
-        print(f"SIgma applied in LDP for model: {sigma}")
+        # print(f"Sigma applied in LDP for model: {sigma}")
         
-        # 3. Áp dụng Mask & Noise
-        for k, v in delta.items():
-            if v.dtype not in [torch.float, torch.float32]:
-                noisy_delta[k] = v
-                continue
+        # 4. Tính L2 Norm của các phần tử Top-k (Chuẩn DP-SGD)
+        sparse_norm_sq = 0.0
+        for key in trainable_keys:
+            v = delta[key]
+            mask = (v.abs() >= top_k_threshold).float()
+            sparse_norm_sq += torch.sum((v * mask) ** 2).item()
+            
+        sparse_norm = (sparse_norm_sq ** 0.5)
+        # Hệ số thu nhỏ (Chỉ thu nhỏ nếu norm > ngưỡng)
+        clip_factor = max(1.0, sparse_norm / clip_threshold)
 
+        # 5. Áp dụng Clipping, Nhiễu & Mask
+        for key in trainable_keys:
+            v = delta[key]
+            
             # Mask: 1 nếu thuộc Top-k, 0 nếu không
             mask = (v.abs() >= top_k_threshold).float()
             
-            # Clipping: Cắt update trong khoảng [-C, C]
-            # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
-            clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
+            # Clipping toàn cục (Giữ nguyên hướng của Vector Update tốt hơn torch.clamp)
+            clipped_v = v / clip_factor
             
-            # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
-            noise = torch.normal(0, sigma, v.shape, device=self.device)
+            # Tạo nhiễu (Dùng v.device để không bị lỗi xung đột CPU/GPU)
+            noise = torch.normal(0, sigma, v.shape, device=v.device)
             
-            # Update mới = (Clipped_Update + Noise) * Mask
-            # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
-            noisy_delta[k] = (clipped_v + noise) * mask
+            # Update mới = (Clipped + Noise) * Mask
+            noisy_delta[key] = (clipped_v + noise) * mask
             
         return noisy_delta
     def train(self):
@@ -250,54 +317,60 @@ class WorkerNode:
         
         weights_new = None
         train_loss = None
-
+        # Trước khi train: Đẩy model lên GPU
+        self.model = self.model.to(self.device)
         # BƯỚC 2: Thực hiện Training hoặc Tấn công
-        if self.attack_strategy.is_malicious:
-            # Kẻ tấn công trả về weights độc hại
-            weights_new = self.attack_strategy.execute(self)
-            train_loss = None # Hoặc loss giả
-        else:
-            # Node thường train bình thường
-            weights_new, train_loss = self._standard_train()
+        try:
+            if self.attack_strategy.is_malicious:
+                # Kẻ tấn công trả về weights độc hại
+                weights_new = self.attack_strategy.execute(self)
+                train_loss = None # Hoặc loss giả
+            else:
+                # Node thường train bình thường
+                weights_new, train_loss = self._standard_train()
 
-        # BƯỚC 3 & 4: Tính Delta và Áp dụng LDP
-        # Chỉ áp dụng LDP nếu được bật trong Config
-        if Config.ENABLE_LDP:
-            # a. Tính Delta (Update)
-            delta = {}
-            final_weights = {}
-            untouched_params = {}
-            for k in weights_new.keys():
-                if k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
-                    delta[k] = weights_new[k] - w_old[k]
-                else:
-                    # Giữ nguyên các tham số không train được (batchnorm stats, long types...)
-                    untouched_params[k] = weights_new[k] 
+            # BƯỚC 3 & 4: Tính Delta và Áp dụng LDP
+            # Chỉ áp dụng LDP nếu được bật trong Config
+            if Config.ENABLE_LDP and self.config.get('system_mode') == 'PROPOSED':
+                # a. Tính Delta (Update)
+                delta = {}
+                final_weights = {}
+                untouched_params = {}
+                for k in weights_new.keys():
+                    if k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                        delta[k] = weights_new[k].cpu() - w_old[k].cpu()
+                    else:
+                        # Giữ nguyên các tham số không train được (batchnorm stats, long types...)
+                        untouched_params[k] = weights_new[k].cpu()
 
-            # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
-            # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
-            noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.05)
+                # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
+                # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
+                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.05)
 
-            # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
-            
-            for k in weights_new.keys():
-                if k in noisy_delta and k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
-                    final_weights[k] = w_old[k] + noisy_delta[k]
-                elif k in untouched_params:
-                    final_weights[k] = untouched_params[k]
-                else:
-                    final_weights[k] = weights_new[k]
-        else:
-            # Nếu không dùng LDP thì trả về nguyên gốc
-            final_weights = weights_new
+                # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
+                
+                for k in weights_new.keys():
+                    if k in noisy_delta and k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                        final_weights[k] = w_old[k].cpu() + noisy_delta[k].cpu()
+                    elif k in untouched_params:
+                        final_weights[k] = untouched_params[k]
+                    else:
+                        final_weights[k] = weights_new[k].cpu()
+            else:
+                # Nếu không dùng LDP thì trả về nguyên gốc
+                final_weights = {k: v.cpu() for k, v in weights_new.items()}
 
-        # Cập nhật lại model của worker với weights cuối cùng (để đồng bộ)
-        self.model.load_state_dict(final_weights)
+            # Cập nhật lại model của worker với weights cuối cùng (để đồng bộ)
+            self.model.load_state_dict(final_weights)
 
-        return {
-            "weights": final_weights,
-            "loss": train_loss
-        }
+            return {
+                "weights": final_weights,
+                "loss": train_loss
+            }
+        finally:
+            self.model = self.model.to('cpu')
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     def _standard_train(self):
         self.model.train()
@@ -312,6 +385,8 @@ class WorkerNode:
                 output = self.model(data)
                 loss = self.criterion(output, target)
                 loss.backward()
+                # Cắt gọn gradient
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=2.0)
                 self.optimizer.step()
                 batch_losses.append(loss.item())
             _cal_epoch_loss = sum(batch_losses) / len(batch_losses) if batch_losses else 0.0
@@ -576,6 +651,7 @@ class WorkerNode:
         Chuyên dùng cho Label Flipping: Tính ASR, Recall, Precision.
         """
         self.model.eval()
+        self.model.to(self.device)
         correct = 0
         total = 0
         
@@ -586,36 +662,38 @@ class WorkerNode:
         
         tgt_pred_total = 0
         tgt_true_positive = 0
+        try:
+            with torch.no_grad():
+                for data, target in test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    logits = self.model(data)
+                    preds = logits.argmax(dim=1)
+                    
+                    # Metric cơ bản
+                    correct += preds.eq(target).sum().item()
+                    total += len(target)
 
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                logits = self.model(data)
-                preds = logits.argmax(dim=1)
-                
-                # Metric cơ bản
-                correct += preds.eq(target).sum().item()
-                total += len(target)
+                    # Metric Label Flipping
+                    # 1. Source Class stats
+                    src_mask = (target == src_class)
+                    src_total += src_mask.sum().item()
+                    src_correct += (preds[src_mask] == src_class).sum().item()
+                    src_flipped_to_tgt += (preds[src_mask] == tgt_class).sum().item()
 
-                # Metric Label Flipping
-                # 1. Source Class stats
-                src_mask = (target == src_class)
-                src_total += src_mask.sum().item()
-                src_correct += (preds[src_mask] == src_class).sum().item()
-                src_flipped_to_tgt += (preds[src_mask] == tgt_class).sum().item()
+                    # 2. Target Class stats
+                    tgt_pred_mask = (preds == tgt_class)
+                    tgt_pred_total += tgt_pred_mask.sum().item()
+                    tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
 
-                # 2. Target Class stats
-                tgt_pred_mask = (preds == tgt_class)
-                tgt_pred_total += tgt_pred_mask.sum().item()
-                tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
-
-        return {
-            "accuracy": correct / total,
-            "error_rate": 1.0 - (correct / total),
-            "src_recall": src_correct / (src_total + 1e-9),
-            "asr": src_flipped_to_tgt / (src_total + 1e-9),
-            "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9)
-        }
+            return {
+                "accuracy": correct / total,
+                "error_rate": 1.0 - (correct / total),
+                "src_recall": src_correct / (src_total + 1e-9),
+                "asr": src_flipped_to_tgt / (src_total + 1e-9),
+                "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9)
+            }
+        finally:
+            self.model.to('cpu')
     
     def evaluate_backdoor(self, test_loader, target_class):
         """
@@ -778,4 +856,47 @@ class WorkerNode:
             "error_rate": error_rate,
             "loss": avg_loss,
             "mse": avg_mse
+        }
+    def evaluate_standard(self, test_loader):
+        """
+        Đánh giá hiệu năng chuẩn (Clean Metrics) cho kịch bản bình thường.
+        Chỉ tính toán Accuracy và Loss để tối ưu tốc độ.
+        """
+        # Kiểm tra NaN/Inf trước khi đo (đề phòng model nổ)
+        for param in self.model.parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
+                return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
+
+        self.model.eval()
+        test_loss = 0.0
+        correct = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                
+                # Forward
+                logits = self.model(data)
+                
+                # 1. Tính Accuracy
+                pred = logits.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                
+                # 2. Tính Loss (CrossEntropy)
+                # Kỹ thuật chuẩn: Nhân loss của batch với số lượng sample trong batch đó
+                loss = self.criterion(logits, target)
+                test_loss += loss.item() * data.size(0) 
+                
+                total_samples += data.size(0)
+
+        # Tổng hợp kết quả
+        avg_loss = test_loss / total_samples if total_samples > 0 else 0.0
+        accuracy = correct / total_samples if total_samples > 0 else 0.0
+        
+        return {
+            "accuracy": accuracy,
+            "error_rate": 1.0 - accuracy,
+            "loss": avg_loss
         }

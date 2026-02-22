@@ -47,10 +47,29 @@ def compute_model_hash(state_dict):
 
 # --- 3. TOÁN HỌC & AGGREGATION ---
 
+# def federated_averaging(models_list):
+#     """
+#     Thuật toán FedAvg: Tính trung bình cộng các tham số của nhiều model.
+#     Input: Danh sách các state_dict (dạng Tensor).
+#     """
+#     if not models_list:
+#         return None
+
+#     # Copy model đầu tiên làm khung
+#     avg_weights = copy.deepcopy(models_list[0])
+
+#     # Duyệt qua từng lớp (layer)
+#     for key in avg_weights.keys():
+#         # Lấy tham số của lớp này từ tất cả các model
+#         layer_updates = [model[key] for model in models_list]
+        
+#         # Tính trung bình (stack lại rồi mean theo chiều 0)
+#         avg_weights[key] = torch.stack(layer_updates).mean(dim=0)
+        
+#     return avg_weights
 def federated_averaging(models_list):
     """
     Thuật toán FedAvg: Tính trung bình cộng các tham số của nhiều model.
-    Input: Danh sách các state_dict (dạng Tensor).
     """
     if not models_list:
         return None
@@ -60,12 +79,14 @@ def federated_averaging(models_list):
 
     # Duyệt qua từng lớp (layer)
     for key in avg_weights.keys():
-        # Lấy tham số của lớp này từ tất cả các model
-        layer_updates = [model[key] for model in models_list]
+        # BẮT BUỘC: Ép tất cả tensor về CPU trước khi stack để an toàn tuyệt đối
+        layer_updates = [model[key].cpu() for model in models_list]
         
-        # Tính trung bình (stack lại rồi mean theo chiều 0)
-        avg_weights[key] = torch.stack(layer_updates).mean(dim=0)
-        
+        if layer_updates[0].is_floating_point():
+            avg_weights[key] = torch.stack(layer_updates).mean(dim=0).clone().detach()
+        else:
+            avg_weights[key] = layer_updates[0].clone().detach()
+            
     return avg_weights
 
 def compute_euclidean_distance(w1, w2):
