@@ -352,7 +352,7 @@ class WorkerNode:
 
                 # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
                 # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
-                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.01)
+                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.2)
 
                 # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
                 

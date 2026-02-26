@@ -122,9 +122,10 @@ class FreeRidingStrategy(AttackStrategy):
 
 class LabelFlippingStrategy(AttackStrategy):
     """Kẻ đảo nhãn: Train nhưng sửa nhãn dữ liệu"""
-    def __init__(self, source_class, target_class):
+    def __init__(self, source_class, target_class, scale_factor=15.0):
         self.source_class = source_class
         self.target_class = target_class
+        self.scale_factor = scale_factor
 
     def execute(self, worker):
         print(f"Worker {worker.id}: Label Flipping Attack")
@@ -134,6 +135,8 @@ class LabelFlippingStrategy(AttackStrategy):
         criterion = worker.criterion
         device = worker.device
 
+        # Lưu lại weights gốc để tính Delta
+        w_old = {k: v.clone().detach() for k, v in model.state_dict().items()}
         # Đầu độc dữ liệu
         poisoned_loader = self._create_poisoned_dataloader(worker.data_loader)
         # Huấn luyên cục bộ
@@ -146,15 +149,27 @@ class LabelFlippingStrategy(AttackStrategy):
                 output = model(data)
                 loss = criterion(output, target)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
                 optimizer.step()
-        return model.state_dict()
+        w_new = model.state_dict()
+        final_weights = {}
+        # 2. ÁP DỤNG MODEL REPLACEMENT (Khuếch đại Gradient)
+        for k in w_new.keys():
+            if w_new[k].dtype in [torch.float, torch.float32]:
+                # Tính Delta của kẻ tấn công
+                delta = w_new[k] - w_old[k]
+                # Nhân bản Delta để lấn át FedAvg
+                final_weights[k] = w_old[k] + (delta * self.scale_factor)
+            else:
+                final_weights[k] = w_new[k]
+        return {k: v.cpu().clone().detach() for k, v in final_weights.items()}
     
     def _create_poisoned_dataloader(self, original_loader):
         poisoned_data = []
         for data,target in original_loader:
             poisoned_target = torch.where(
                 target == self.source_class,
-                torch.tensor(self.target_class),
+                torch.tensor(self.target_class, device=target.device),
                 target
             )
             poisoned_data.append((data, poisoned_target))
@@ -522,6 +537,16 @@ class GradientInversionStrategy(AttackStrategy):
     #         # Trả về weights thật để không làm hỏng quy trình FL (Attack này là nghe lén, không phá hoại)
     #         # Hoặc trả về weights ngẫu nhiên nếu muốn giả vờ không train.
     #         return worker.model.state_dict()
+    def total_variation_loss(self, img):
+        """
+        Tính độ nhiễu/răng cưa của bức ảnh. 
+        Ép bức ảnh phải mượt mà, giống ảnh thật, tránh bị nhiễu hạt khổng lồ.
+        """
+        # img có shape [batch, channels, height, width]
+        bs_img, c_img, h_img, w_img = img.size()
+        tv_h = torch.pow(img[:, :, 1:, :] - img[:, :, :-1, :], 2).sum()
+        tv_w = torch.pow(img[:, :, :, 1:] - img[:, :, :, :-1], 2).sum()
+        return (tv_h + tv_w) / (bs_img * c_img * h_img * w_img)
     def execute(self, worker):
         print(f"[Attacker {worker.id}] Starting Gradient Inversion Attack...")
         
@@ -561,52 +586,66 @@ class GradientInversionStrategy(AttackStrategy):
         
         print(f"   -> Reconstructing... (Max {self.num_iterations} iters)")
 
+        tv_weight = 1e-4 # Hệ số phạt nếu ảnh bị nhiễu
+
         for iters in range(self.num_iterations):
             def closure():
                 optimizer.zero_grad()
+                
+                # 1. Ép dummy_data không bị nổ giá trị (Soft Clamp)
+                dummy_data.data.clamp_(-3.0, 3.0)
                 
                 # Forward pass với dummy data
                 pred_dummy = worker.model(dummy_data)
                 dummy_loss = criterion(pred_dummy, F.softmax(dummy_label, dim=-1))
                 
-                # TÍNH DUMMY GRADIENT (Đạo hàm bậc 1)
-                # create_graph=True là BẮT BUỘC để tính đạo hàm bậc 2 cho việc update dummy_data
+                # TÍNH DUMMY GRADIENT
                 dummy_dy_dx = torch.autograd.grad(dummy_loss, model_params, create_graph=True)
                 
                 # TÍNH LOSS GIỮA 2 GRADIENTS
-                grad_diff = 0
+                # Sửa thành torch.tensor để an toàn tuyệt đối trên GPU
+                grad_diff = torch.tensor(0.0, device=worker.device) 
                 for gx, gy in zip(dummy_dy_dx, original_dy_dx):
                     grad_diff += ((gx - gy) ** 2).sum()
                 
-                # Backward pass (Tính đạo hàm bậc 2 để update dummy_data)
-                grad_diff.backward()
+                # THÊM TOTAL VARIATION LOSS ĐỂ ÉP RA ẢNH ĐẸP
+                tv_penalty = self.total_variation_loss(dummy_data)
+                total_loss = grad_diff + tv_weight * tv_penalty
                 
-                return grad_diff
+                # Backward pass
+                total_loss.backward()
+                
+                return total_loss
             
-            optimizer.step(closure)
+            # CHÚ Ý Ở ĐÂY: Lấy luôn current_loss từ hàm step()
+            current_loss = optimizer.step(closure)
             
-            # Logging (chỉ lấy giá trị để in, không tính toán graph)
+            # Logging
             if iters % 50 == 0:
-                # with torch.no_grad():
-                    # Tính lại loss để in ra (không backward)
-                pred_d = worker.model(dummy_data)
-                d_loss = criterion(pred_d, F.softmax(dummy_label, dim=-1))
-                d_dy_dx = torch.autograd.grad(d_loss, model_params, create_graph=False) # False ở đây để tiết kiệm
-                
-                current_loss = 0
-                for gx, gy in zip(d_dy_dx, original_dy_dx):
-                    current_loss += ((gx - gy) ** 2).sum()
+                with torch.no_grad(): # Tắt grad để tính MSE cho nhẹ máy
+                    def normalize_01(tensor):
+                        t_min, t_max = tensor.min(), tensor.max()
+                        if t_max - t_min > 1e-6:
+                            return (tensor - t_min) / (t_max - t_min)
+                        return tensor
+                        
+                    norm_dummy = normalize_01(dummy_data)
+                    norm_gt = normalize_01(gt_data)
                     
-                mse = ((dummy_data - gt_data)**2).mean().item()
-                print(f"      Iter {iters}: Grad Loss={current_loss.item():.4f}, Image MSE={mse:.4f}")
+                    # Tính MSE trên ảnh đã chuẩn hóa
+                    mse = F.mse_loss(norm_dummy, norm_gt).item()
+                    
+                    # XÓA BỎ DÒNG current_loss = closure() ở đây
+                    print(f"      Iter {iters}: Grad Loss={current_loss.item():.6f}, Normalized Image MSE={mse:.4f}")
                 
+                # Điều kiện dừng sớm
                 if current_loss.item() < 1e-8:
                     break
         
         self.reconstructed_data = dummy_data.detach().clone().cpu()
         self.ground_truth = gt_data.detach().clone().cpu()
         # Lưu ảnh và return
-        self._save_result_image(gt_data, dummy_data, worker.id)
+        self._save_result_image(gt_data, dummy_data, worker)
         print(f"   -> Reconstruction finished. Image saved to {self.save_dir}")
         # Reset model về trạng thái không cần grad để trả về (quan trọng cho Baseline)
         for param in model_params:
@@ -614,31 +653,35 @@ class GradientInversionStrategy(AttackStrategy):
             
         return worker.model.state_dict()
 
-    def _save_result_image(self, true_tensor, dummy_tensor, worker_id):
+    def _save_result_image(self, true_tensor, dummy_tensor, worker):
         """Hàm phụ trợ để lưu ảnh so sánh"""
-        # Denormalize (giả sử CIFAR/MNIST chuẩn hóa 0.5)
-        # Bạn cần chỉnh lại mean/std tùy dataset
-        def _denorm(tensor):
-            return tensor.clone().detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+        def _denorm_and_scale(tensor):
+            img = tensor.clone().detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+            img = (img - img.min()) / (img.max() - img.min() + 1e-8) # Scale về 0-1
+            return img
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 4))
         
         # Ảnh gốc
-        orig_img = _denorm(true_tensor)
-        # Normalize về [0,1] để plot
-        orig_img = (orig_img - orig_img.min()) / (orig_img.max() - orig_img.min())
+        orig_img = _denorm_and_scale(true_tensor)
         axes[0].imshow(orig_img, cmap='gray' if orig_img.shape[2]==1 else None)
         axes[0].set_title("Ground Truth (Victim)")
         axes[0].axis('off')
         
         # Ảnh tái tạo
-        rec_img = _denorm(dummy_tensor)
-        rec_img = (rec_img - rec_img.min()) / (rec_img.max() - rec_img.min())
+        rec_img = _denorm_and_scale(dummy_tensor)
         axes[1].imshow(rec_img, cmap='gray' if rec_img.shape[2]==1 else None)
         axes[1].set_title("Reconstructed (Attacker)")
         axes[1].axis('off')
         
-        plt.savefig(f"{self.save_dir}/gia_worker_{worker_id}_{int(time.time())}.png")
+        # Lấy thông tin để đặt tên file
+        mode = getattr(worker, 'system_mode', 'PROPOSED')
+        round_id = getattr(worker, 'current_round', 0)
+        
+        filename = f"{mode}_Round{round_id:02d}_Worker{worker.id}.png"
+        save_path = os.path.join(self.save_dir, filename)
+        
+        plt.savefig(save_path)
         plt.close()
 
     def evaluate(self, worker):
