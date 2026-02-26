@@ -764,6 +764,7 @@
 						batch_size: parseInt(formData.get("batch_size")),
 						learning_rate: parseFloat(formData.get("learning_rate")),
 						target_rounds: targetRounds,
+						reset: initialReset,
 					};
 
 					console.log(`Bắt đầu chạy ${targetRounds} vòng...`);
@@ -1025,7 +1026,8 @@
 						const targetRounds =
 							parseInt(document.getElementById("targetRoundsAttack").value) ||
 							1;
-						// const initialReset = document.getElementById("resetSwitchAttack").checked; // Server tự handle reset
+						const initialReset =
+							document.getElementById("resetSwitchAttack").checked; // Server tự handle reset
 
 						// 2. Tạo Base Payload
 						const basePayload = {
@@ -1039,6 +1041,7 @@
 							batch_size: parseInt(formData.get("batch_size")),
 							learning_rate: parseFloat(formData.get("learning_rate")),
 							target_rounds: targetRounds, // Gửi số vòng lên server
+							reset: initialReset,
 						};
 
 						// Thêm params riêng cho BASELINE (nếu chọn Baseline bị tấn công)
@@ -1084,7 +1087,7 @@
 						const response = await fetch("/start_training", {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify(basePayload), // basePayload chắc chắn đã định nghĩa ở trên
+							body: JSON.stringify(basePayload),
 						});
 
 						const data = await response.json();

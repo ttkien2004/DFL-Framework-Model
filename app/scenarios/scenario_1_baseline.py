@@ -18,7 +18,7 @@ class ScenarioExperiment1(BaseScenario):
         alpha = self.config.get('non_iid_alpha', None) # Lấy alpha từ config
         num_workers = len(workers)
         
-        print(f"[Scenario 1] Setting up Data for {num_workers} workers. Dataset: {dataset_name}, Alpha: {alpha}")
+        print(f"[Scenario 1] Setting up Data for {num_workers} workers. Dataset: {dataset_name}, Alpha: {alpha}", flush=True)
 
         # BƯỚC A: Lấy Targets (Nhãn) của toàn bộ dataset
         # Ta cần load dataset gốc 1 lần để biết phân phối nhãn
@@ -104,7 +104,7 @@ class ScenarioExperiment1(BaseScenario):
         if cache_key in ScenarioExperiment1._DIRICHLET_INDICES_CACHE:
             return ScenarioExperiment1._DIRICHLET_INDICES_CACHE[cache_key]
 
-        print(f"⚡ [Data Partition] Executing Dirichlet Partition (Alpha={alpha})...")
+        print(f"⚡ [Data Partition] Executing Dirichlet Partition (Alpha={alpha})...", flush=True)
         
         min_size = 0
         targets = np.array(targets)
@@ -128,8 +128,10 @@ class ScenarioExperiment1(BaseScenario):
             proportions = np.random.dirichlet(np.repeat(alpha, num_workers))
             
             # Cân bằng lại proportions để tránh trường hợp một worker nhận quá ít hoặc quá nhiều
-            # (Đây là bước optional nhưng giúp ổn định việc train hơn)
+            
             proportions = np.array([p * (len(idx_j) < N / num_workers) for p, idx_j in zip(proportions, net_dataidx_map.values())])
+            if proportions.sum() == 0:
+                proportions = np.ones(num_workers)
             proportions = proportions / proportions.sum()
             
             # Tính điểm cắt (Split points) dựa trên proportions

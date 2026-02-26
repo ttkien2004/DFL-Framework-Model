@@ -141,6 +141,8 @@ def training_loop(total_rounds, req_data):
             for r in range(total_rounds):
                 training_status["current_round"] = r + 1
                 training_status["message"] = f"Running round {r+1}/{total_rounds}..."
+                if r != 0:
+                    req_data['reset'] = False
                 
                 # Gọi engine để chạy 1 vòng
                 result = engine.run_round(r, req_data)
@@ -171,7 +173,7 @@ def start_training():
     # Lấy số vòng từ request (do JS gửi lên)
     # Lưu ý: JS cần gửi key "target_rounds" hoặc "rounds"
     total_rounds = int(req_data.get("target_rounds", 10))
-    print(req_data, Config.NUM_CLUSTERS, "WTF", flush=True)
+    # print(req_data, Config.NUM_CLUSTERS, "WTF", flush=True)
     # print(total_rounds, "CLGV", flush=True)
     # print(f"DEBUG: Total Rounds nhận được = {total_rounds} | CLGV", file=sys.stderr)
     

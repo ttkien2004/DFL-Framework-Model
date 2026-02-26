@@ -141,8 +141,8 @@ class SimulationEngine:
     def run_round(self, round_id, req_data):
         # self._setup_scenario(req_data)
         scenario_id = str(req_data.get('scenario', '1'))
-        current_scenario = ScenarioExperiment4(self.workers,req_data)
-        current_scenario.setup_security(self.workers)
+        # current_scenario = ScenarioExperiment4(self.workers,req_data)
+        # current_scenario.setup_security(self.workers)
 
         # 2. Khởi tạo và Cấu hình Scenario
         if scenario_id == '1':
@@ -150,7 +150,7 @@ class SimulationEngine:
             
             # QUAN TRỌNG: Chỉ chia lại dữ liệu (Dirichlet) ở vòng 0 hoặc khi có cờ reset
             # Nếu chạy mỗi vòng sẽ làm mất tính ổn định của Local Training
-            should_reset_data = req_data.get('reset', False) or (round_id == 0)
+            should_reset_data = req_data.get('reset', False)
             
             if should_reset_data:
                 dataset_name = req_data.get('dataset', 'mnist')

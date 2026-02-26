@@ -64,7 +64,7 @@ class Config:
 
     # LDP Config
     # Local Differential Privacy (LDP)
-    ENABLE_LDP = True        # Bật/Tắt LDP
+    ENABLE_LDP = False        # Bật/Tắt LDP
     LDP_EPSILON = 5.0        # Ngân sách riêng tư (Epsilon càng nhỏ càng bảo mật nhưng nhiễu càng lớn)
     LDP_CLIPPING_THRESHOLD = 0.1
     LDP_SIGMA = 0.1 # Noise multiplier càng cao thì epsilon càng nhỏ (bảo mật hơn)
