@@ -17,7 +17,7 @@ class Config:
 
     # --- 2. Cấu hình Mạng BCFL (Network) ---
     NUM_WORKERS = 5          # Số lượng Worker giả lập
-    NUM_CLUSTERS = 2         # Số lượng cụm (Cluster) - K
+    NUM_CLUSTERS = 3         # Số lượng cụm (Cluster) - K
     NUM_ROUNDS = 50          # Tổng số vòng Global Rounds chạy thử nghiệm
 
     # --- 3. Cấu hình Huấn luyện (Training Hyperparameters) ---

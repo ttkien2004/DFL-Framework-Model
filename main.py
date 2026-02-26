@@ -40,14 +40,20 @@ history = {
 # Biến lưu tên file hiện tại
 history_filename = None
 
-def save_history():
+def save_history(system_mode, agg_algo=None, attack_type=None):
     global history_filename
     
     # Nếu chưa có file thì tạo tên mới với timestamp
     if history_filename is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         os.makedirs("histories", exist_ok=True)
-        history_filename = f"histories/history_{timestamp}.json"
+        if not attack_type:
+            history_filename = f"histories/history_{timestamp}_{system_mode}.json"
+        else:
+            if agg_algo:
+                history_filename = f"histories/history_{timestamp}_{attack_type}_{agg_algo}.json"
+            else:
+                history_filename = f"histories/history_{timestamp}_{attack_type}_proposed.json"
     
     with open(history_filename, "w") as f:
         json.dump(history, f, indent=4)
@@ -157,6 +163,7 @@ def training_loop(total_rounds, req_data):
             
             # 1. Khởi tạo lại hệ thống (Reset)
             requested_mode = req_data.get('system_mode', 'PROPOSED').upper()
+            attack_type = req_data.get('attack_type', None)
             print(f"[Training Loop] Starting {total_rounds} rounds for {requested_mode}...")
             
             engine.initialize_system(req_data)
@@ -183,7 +190,11 @@ def training_loop(total_rounds, req_data):
                 
                 # Cập nhật History
                 update_history_dynamic(history, r, result, requested_mode)
-                save_history()
+                if attack_type:
+                    agg_algo = req_data.get('aggregation_algorithm')
+                    save_history(system_mode=requested_mode, agg_algo=agg_algo, attack_type=attack_type)
+                else:
+                    save_history(system_mode=requested_mode)
                 
                 if blockchain is not None and blockchain.chain is not None:
                     history['blockchain_height'].append(len(blockchain.chain))
