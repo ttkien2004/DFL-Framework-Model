@@ -32,7 +32,10 @@ def update_history_dynamic(history, current_round, result, requested_mode):
             print(f"[History] New metric detected: '{key}'. Backfilled {prev_rounds_count} rounds with None.")
 
         # B. Thêm giá trị hiện tại
-        history[key].append(value)
+        if isinstance(value, list):
+            history[key].append(value[-1])   # chỉ lấy phần tử mới nhất
+        else:
+            history[key].append(value)
 
     # 3. Xử lý Key Bị Thiếu (Forward Padding)
     # Duyệt qua toàn bộ lịch sử để xem vòng này có thiếu metric nào không

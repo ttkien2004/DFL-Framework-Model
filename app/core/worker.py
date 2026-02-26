@@ -609,49 +609,52 @@ class WorkerNode:
                     "loss": 10000.0, # Giá trị Loss cực lớn tượng trưng
                     "mse": 1.0       # MSE max (giữa 0 và 1) thường là 1 hoặc 2
                 }
+        self.model.to(self.device)
         self.model.eval()
         test_loss = 0
         correct = 0
         total_mse = 0.0
         total_samples = 0
-        
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                
-                # Forward
-                logits = self.model(data)
-                probs = F.softmax(logits, dim=1) # Chuyển về xác suất [0, 1]
-                
-                # 1. Tính CrossEntropy Loss (Mặc định)
-                test_loss += self.criterion(logits, target).item()
-                
-                # 2. Tính Accuracy
-                pred = logits.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                
-                # 3. Tính MSE (Mean Squared Error)
-                # Cần one-hot encode target để so sánh với vector xác suất
-                target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
-                batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
-                total_mse += batch_mse
-                
-                total_samples += len(data)
+        try:
+            with torch.no_grad():
+                for data, target in test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    
+                    # Forward
+                    logits = self.model(data)
+                    probs = F.softmax(logits, dim=1) # Chuyển về xác suất [0, 1]
+                    
+                    # 1. Tính CrossEntropy Loss (Mặc định)
+                    test_loss += self.criterion(logits, target).item()
+                    
+                    # 2. Tính Accuracy
+                    pred = logits.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    
+                    # 3. Tính MSE (Mean Squared Error)
+                    # Cần one-hot encode target để so sánh với vector xác suất
+                    target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
+                    batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
+                    total_mse += batch_mse
+                    
+                    total_samples += len(data)
 
-        # Tổng hợp kết quả
-        avg_loss = test_loss / len(test_loader)
-        accuracy = correct / total_samples
-        avg_mse = total_mse / total_samples
-        
-        # Error Rate = 1 - Accuracy
-        error_rate = 1.0 - accuracy
+            # Tổng hợp kết quả
+            avg_loss = test_loss / len(test_loader)
+            accuracy = correct / total_samples
+            avg_mse = total_mse / total_samples
+            
+            # Error Rate = 1 - Accuracy
+            error_rate = 1.0 - accuracy
 
-        return {
-            "accuracy": accuracy,
-            "error_rate": error_rate,
-            "loss": avg_loss,
-            "mse": avg_mse
-        }
+            return {
+                "accuracy": accuracy,
+                "error_rate": error_rate,
+                "loss": avg_loss,
+                "mse": avg_mse
+            }
+        finally:
+            self.model.to('cpu')
     
     def evaluate_label_flipping(self, test_loader, src_class, tgt_class):
         """
@@ -718,6 +721,7 @@ class WorkerNode:
                     "loss": 10000.0,
                     "asr": 0.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
                 }
+        self.model.to(self.device)
         self.model.eval()
         
         # Metrics cho dữ liệu SẠCH (Main Task)
@@ -728,45 +732,47 @@ class WorkerNode:
         # Metrics cho dữ liệu BACKDOOR
         bd_success = 0 # Số mẫu có trigger bị đoán thành target_class
         bd_total = 0   # Tổng số mẫu dùng để test backdoor
-        
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                
-                # --- 1. ĐÁNH GIÁ TRÊN CLEAN DATA ---
-                logits = self.model(data)
-                clean_loss += self.criterion(logits, target).item()
-                preds = logits.argmax(dim=1)
-                
-                clean_correct += preds.eq(target).sum().item()
-                clean_total += len(target)
-                
-                # --- 2. ĐÁNH GIÁ TRÊN TRIGGERED DATA (ASR) ---
-                # Chỉ đánh giá ASR trên các mẫu KHÔNG thuộc target_class
-                # (Vì nếu ảnh gốc đã là target_class thì đoán đúng không tính là tấn công thành công)
-                non_target_indices = (target != target_class)
-                
-                if non_target_indices.sum().item() > 0:
-                    # Lấy ra các ảnh không phải target
-                    data_bd = data[non_target_indices].clone()
+        try:
+            with torch.no_grad():
+                for data, target in test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
                     
-                    # Gắn Trigger vào các ảnh này
-                    data_bd = self._add_trigger(data_bd)
+                    # --- 1. ĐÁNH GIÁ TRÊN CLEAN DATA ---
+                    logits = self.model(data)
+                    clean_loss += self.criterion(logits, target).item()
+                    preds = logits.argmax(dim=1)
                     
-                    # Dự đoán trên ảnh đã gắn trigger
-                    logits_bd = self.model(data_bd)
-                    preds_bd = logits_bd.argmax(dim=1)
+                    clean_correct += preds.eq(target).sum().item()
+                    clean_total += len(target)
                     
-                    # ASR: Bao nhiêu ảnh đã bị lái sang target_class?
-                    bd_success += (preds_bd == target_class).sum().item()
-                    bd_total += len(data_bd)
+                    # --- 2. ĐÁNH GIÁ TRÊN TRIGGERED DATA (ASR) ---
+                    # Chỉ đánh giá ASR trên các mẫu KHÔNG thuộc target_class
+                    # (Vì nếu ảnh gốc đã là target_class thì đoán đúng không tính là tấn công thành công)
+                    non_target_indices = (target != target_class)
+                    
+                    if non_target_indices.sum().item() > 0:
+                        # Lấy ra các ảnh không phải target
+                        data_bd = data[non_target_indices].clone()
+                        
+                        # Gắn Trigger vào các ảnh này
+                        data_bd = self._add_trigger(data_bd)
+                        
+                        # Dự đoán trên ảnh đã gắn trigger
+                        logits_bd = self.model(data_bd)
+                        preds_bd = logits_bd.argmax(dim=1)
+                        
+                        # ASR: Bao nhiêu ảnh đã bị lái sang target_class?
+                        bd_success += (preds_bd == target_class).sum().item()
+                        bd_total += len(data_bd)
 
-        return {
-            "accuracy": clean_correct / clean_total, # Main Task Accuracy
-            "error_rate": 1.0 - (clean_correct / clean_total),
-            "loss": clean_loss / len(test_loader),
-            "asr": bd_success / (bd_total + 1e-9)    # Backdoor ASR
-        }
+            return {
+                "accuracy": clean_correct / clean_total, # Main Task Accuracy
+                "error_rate": 1.0 - (clean_correct / clean_total),
+                "loss": clean_loss / len(test_loader),
+                "asr": bd_success / (bd_total + 1e-9)    # Backdoor ASR
+            }
+        finally:
+            self.model.to('cpu')
     
     def evaluate_privacy(self):
         """

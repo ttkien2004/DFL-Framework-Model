@@ -103,7 +103,7 @@ class SimulationEngine:
 
         # Nếu là BASELINE, cần thiết lập Topology tĩnh ngay từ đầu (VD: Random Graph)
         if self.system_mode == 'BASELINE':
-            self._setup_static_topology(num_workers)
+            self._setup_static_topology(num_workers, connectivity=0.1)
         else:
             # Chạy bầu cử lần đầu
             # Khởi tạo blockchain            

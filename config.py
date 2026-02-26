@@ -32,7 +32,7 @@ class Config:
     ENABLE_ENCRYPTION = False # (Giai đoạn sau)
 
     # --- 5. Cấu hình Blockchain & Đồng thuận ---
-    COMMITTEE_SIZE = 3       # Số lượng thành viên trong ủy ban
+    COMMITTEE_SIZE = 4       # Số lượng thành viên trong ủy ban
     CONSENSUS_THRESHOLD = 0.66 # Tỷ lệ phiếu bầu cần thiết (2/3)
     MIN_REPUTATION = 50.0    # Điểm uy tín tối thiểu để được làm Block Leader
     
@@ -72,7 +72,7 @@ class Config:
     WEIGHT_DECAY = 1e-4
 
     # Ngưỡng đánh giá của Ủy ban
-    ACC_THRESHOLD = 10.0   # k
+    ACC_THRESHOLD = 20.0   # k
 
     # Cấu hình của Secret Sharing và VIEW-CHANGE
     T_THRESHOLD = COMMITTEE_SIZE - 1

@@ -70,15 +70,19 @@ class StandardDFLNode(WorkerNode):
             
             if data_batch:
                 # Gọi UBAR static method
-                aggregated_model = AggregationAlgorithms.ubar(
-                    own_state_dict=my_update,
-                    neighbor_updates=valid_updates, # Danh sách weights hàng xóm
-                    model_template=self.model,      # Dùng model của mình làm khuôn
-                    data_batch=data_batch,
-                    criterion=self.criterion,
-                    device=self.device,
-                    rho=self.config.get('ubar_rho', 0.5) # Config tỷ lệ tin cậy
-                )
+                self.model.to(self.device)
+                try:
+                    aggregated_model = AggregationAlgorithms.ubar(
+                        own_state_dict=my_update,
+                        neighbor_updates=valid_updates, # Danh sách weights hàng xóm
+                        model_template=self.model,      # Dùng model của mình làm khuôn
+                        data_batch=data_batch,
+                        criterion=self.criterion,
+                        device=self.device,
+                        rho=self.config.get('ubar_rho', 0.5) # Config tỷ lệ tin cậy
+                    )
+                finally:
+                    self.model.to('cpu')
                 
                 # UBAR dùng self.model để thử weights hàng xóm
                 # Nên sau khi chạy xong, self.model đang chứa weights lung tung.

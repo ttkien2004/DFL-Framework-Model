@@ -18,6 +18,11 @@ from app.blockchain.node_manager import NodeManager
 import argparse
 import threading
 
+import json
+import os
+from datetime import datetime
+from collections import defaultdict
+
 app = Flask(__name__)
 
 # Khởi tạo hệ thống giả lập
@@ -32,6 +37,33 @@ history = {
     "blockchain_height": [],
     "system_mode": []
 }
+# Biến lưu tên file hiện tại
+history_filename = None
+
+def save_history():
+    global history_filename
+    
+    # Nếu chưa có file thì tạo tên mới với timestamp
+    if history_filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs("histories", exist_ok=True)
+        history_filename = f"histories/history_{timestamp}.json"
+    
+    with open(history_filename, "w") as f:
+        json.dump(history, f, indent=4)
+
+
+def load_history(filename=None):
+    global history, history_filename
+    
+    if filename is not None:
+        history_filename = filename
+    
+    if history_filename and os.path.exists(history_filename):
+        with open(history_filename, "r") as f:
+            history = json.load(f)
+    else:
+        history = defaultdict(list)
 
 # Biến toàn cục theo dõi dataset
 current_system_dataset = Config.DATASET_NAME
@@ -141,6 +173,8 @@ def training_loop(total_rounds, req_data):
             for r in range(total_rounds):
                 training_status["current_round"] = r + 1
                 training_status["message"] = f"Running round {r+1}/{total_rounds}..."
+                history_filename = None
+
                 if r != 0:
                     req_data['reset'] = False
                 
@@ -149,6 +183,7 @@ def training_loop(total_rounds, req_data):
                 
                 # Cập nhật History
                 update_history_dynamic(history, r, result, requested_mode)
+                save_history()
                 
                 if blockchain is not None and blockchain.chain is not None:
                     history['blockchain_height'].append(len(blockchain.chain))
@@ -180,8 +215,7 @@ def start_training():
     # Chạy thread ngầm
     thread = threading.Thread(
         target=training_loop,
-        args=(total_rounds, req_data),
-        daemon=True
+        args=(total_rounds, req_data)
     )
     thread.start()
 
@@ -191,6 +225,8 @@ def start_training():
 @app.route('/training_status', methods=['GET'])
 def get_training_status():
     return jsonify(training_status)
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -205,4 +241,4 @@ if __name__ == '__main__':
 
     PORT = args.port
     Config.NUM_CLUSTERS = args.nc
-    app.run(host=Config.HOST, port=PORT, debug=True, use_reloader=True)
+    app.run(host=Config.HOST, port=PORT, debug=False, use_reloader=False)

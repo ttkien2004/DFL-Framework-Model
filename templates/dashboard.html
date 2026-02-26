@@ -666,7 +666,7 @@
 			 `;
 			}
 			function exportToExcel() {
-				// 1. Kiểm tra dữ liệu
+				// 1. Kiểm tra dữ liệu				
 				if (
 					!globalHistory ||
 					!globalHistory.rounds ||
@@ -724,6 +724,7 @@
 				if (isAttackScenario) {
 					fileName = `bcfl_metrics_${timestamp}_${attackName}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
 				} else {
+					console.log("Hello word")
 					fileName = `bcfl_metrics_${timestamp}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
 				}
 
