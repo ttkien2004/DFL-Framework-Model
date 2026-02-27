@@ -8,6 +8,7 @@ import random
 import numpy as np
 
 class ScenarioExperiment4(BaseScenario):
+    _DIRICHLET_INDICES_CACHE = {}
     def __init__(self, workers, config):
         super().__init__(workers, config)
 
@@ -42,13 +43,14 @@ class ScenarioExperiment4(BaseScenario):
         else:
             print(f"Warning: Unknown attack type '{attack_type}'. No attack applied.")
     
-    def setup_data(self):
+    def setup_data(self, dataset_name):
         """
         Hiện thực hàm setup_data (Bắt buộc).
         Quyết định phân phối dữ liệu (IID hoặc Non-IID).
         """
         dist_type = self.config.get('distribution', 'IID').upper()
-        alpha = self.config.get('alpha', 0.5)
+        alpha = self.config.get('non_iid_alpha', 0.5)
+        num_workers = len(self.workers)
         
         print(f"Setting up Data: {dist_type} (alpha={alpha})")
         
@@ -56,10 +58,25 @@ class ScenarioExperiment4(BaseScenario):
         # Nếu không có logic đặc biệt thì chỉ cần pass hoặc log ra
         if dist_type == 'NON_IID':
             # self._apply_non_iid_distribution(self.workers, alpha)
-            pass 
+            indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
+            for w in self.workers:
+                if w.id in indices_map:
+                    w.apply_new_indices(indices_map[w.id], dataset_name)
+                    
+            print("[Scenario 4] Data setup completed.")
         else:
             # Mặc định là IID (đã được load từ lúc init worker)
-            pass
+            targets = self._get_raw_targets(dataset_name)
+            total_size = len(targets)
+            indices = np.arange(total_size)
+            np.random.shuffle(indices)
+            split_size = total_size // num_workers
+            
+            indices_map = {i: indices[i * split_size : (i + 1) * split_size].tolist() for i in range(num_workers)}
+            for w in self.workers:
+                if w.id in indices_map:
+                    w.apply_new_indices(indices_map[w.id], dataset_name)
+            print(" -> IID Partitioning Applied.")
     
 
     def setup_network(self):
@@ -200,3 +217,72 @@ class ScenarioExperiment4(BaseScenario):
             # Lưu ý: Worker này sẽ đóng vai kẻ tấn công, nghe lén và tái tạo ảnh            
             workers[idx].attack_strategy = AttackFactory.get_strategy('GIA', gia_config)
             print(f"   -> Worker {workers[idx].id} is set as Eavesdropper/Attacker")
+    
+    @staticmethod
+    def partition_dirichlet(targets, num_workers, alpha, seed=42):
+        """
+        Chia index dữ liệu theo phân phối Dirichlet.
+        
+        Args:
+            targets (list/array): Danh sách nhãn (labels) của toàn bộ dataset.
+            num_workers (int): Số lượng worker.
+            alpha (float): Tham số tập trung (Concentration parameter). 
+                        Alpha càng nhỏ -> Càng Non-IID (mất cân bằng).
+                        Alpha càng lớn -> Càng giống IID (cân bằng).
+            seed (int): Random seed để đảm bảo tính nhất quán.
+            
+        Returns:
+            dict: {worker_id: [list_of_indices]}
+        """
+    # Kiểm tra Cache trước
+        cache_key = f"{len(targets)}_{num_workers}_{alpha}_{seed}"
+        if cache_key in ScenarioExperiment4._DIRICHLET_INDICES_CACHE:
+            return ScenarioExperiment4._DIRICHLET_INDICES_CACHE[cache_key]
+
+        print(f"⚡ [Data Partition] Executing Dirichlet Partition (Alpha={alpha})...", flush=True)
+        
+        min_size = 0
+        targets = np.array(targets)
+        num_classes = len(np.unique(targets))
+        N = len(targets)
+        
+        # Đảm bảo tính nhất quán
+        np.random.seed(seed)
+
+        # Dictionary chứa index cho từng worker
+        net_dataidx_map = {i: [] for i in range(num_workers)}
+
+        # Lặp qua từng class để chia (để đảm bảo class nào cũng được phân phối)
+        for k in range(num_classes):
+            # Lấy tất cả index của class k
+            idx_k = np.where(targets == k)[0]
+            np.random.shuffle(idx_k)
+            
+            # Tạo phân phối Dirichlet cho class k
+            # proportions: mảng [p1, p2, ..., pn] tổng bằng 1
+            proportions = np.random.dirichlet(np.repeat(alpha, num_workers))
+            
+            # Cân bằng lại proportions để tránh trường hợp một worker nhận quá ít hoặc quá nhiều
+            
+            proportions = np.array([p * (len(idx_j) < N / num_workers) for p, idx_j in zip(proportions, net_dataidx_map.values())])
+            if proportions.sum() == 0:
+                proportions = np.ones(num_workers)
+            proportions = proportions / proportions.sum()
+            
+            # Tính điểm cắt (Split points) dựa trên proportions
+            # Cumsum giúp chia mảng index thành các đoạn
+            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+            
+            # Thực hiện chia và gán vào map
+            idx_batch = np.split(idx_k, proportions)
+            for i in range(num_workers):
+                net_dataidx_map[i] += idx_batch[i].tolist()
+
+        # Lưu vào Cache
+        ScenarioExperiment4._DIRICHLET_INDICES_CACHE[cache_key] = net_dataidx_map
+        
+        # Log thống kê để kiểm tra (Optional)
+        # for i in range(num_workers):
+        #     print(f"   -> Worker {i}: {len(net_dataidx_map[i])} samples")
+            
+        return net_dataidx_map

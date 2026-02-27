@@ -72,7 +72,7 @@ class Config:
     WEIGHT_DECAY = 1e-4
 
     # Ngưỡng đánh giá của Ủy ban
-    ACC_THRESHOLD = 20.0   # k
+    ACC_THRESHOLD = 40.0   # k
 
     # Cấu hình của Secret Sharing và VIEW-CHANGE
     T_THRESHOLD = COMMITTEE_SIZE - 1
