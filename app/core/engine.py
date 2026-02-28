@@ -165,8 +165,15 @@ class SimulationEngine:
             for node in self.workers:
                 if node.is_malicious: cnt_mal += 1
             self.blocked_nodes = set()
+            # QUAN TRỌNG: Chỉ chia lại dữ liệu (Dirichlet) ở vòng 0 hoặc khi có cờ reset
+            # Nếu chạy mỗi vòng sẽ làm mất tính ổn định của Local Training
+            should_reset_data = req_data.get('reset', False)
+            
             current_scenario = ScenarioExperiment4(self.workers, req_data)
             # Scenario 4 tập trung vào tấn công, cần setup mỗi vòng (hoặc tùy logic tấn công động)
+            if should_reset_data:
+                dataset_name = req_data.get('dataset', 'mnist')
+                current_scenario.setup_data(self.workers, dataset_name)
             current_scenario.setup_security(self.workers)
 
             attack_config = {
