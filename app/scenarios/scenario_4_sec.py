@@ -6,6 +6,7 @@ from app.core.attacks import (
 )
 import random
 import numpy as np
+from torchvision import datasets, transforms
 
 class ScenarioExperiment4(BaseScenario):
     _DIRICHLET_INDICES_CACHE = {}
@@ -43,42 +44,62 @@ class ScenarioExperiment4(BaseScenario):
         else:
             print(f"Warning: Unknown attack type '{attack_type}'. No attack applied.")
     
-    def setup_data(self, dataset_name):
+    def setup_data(self, workers, dataset_name):
         """
         Hiện thực hàm setup_data (Bắt buộc).
         Quyết định phân phối dữ liệu (IID hoặc Non-IID).
         """
         dist_type = self.config.get('distribution', 'IID').upper()
         alpha = self.config.get('non_iid_alpha', 0.5)
-        num_workers = len(self.workers)
+        num_workers = len(workers)
         
         print(f"Setting up Data: {dist_type} (alpha={alpha})")
         
         # Nếu là Non-IID thì gọi hàm chia lại dữ liệu (giả sử bạn có hàm này)
         # Nếu không có logic đặc biệt thì chỉ cần pass hoặc log ra
-        if dist_type == 'NON_IID':
+        targets = self._get_raw_targets(dataset_name)
+        if alpha is not None:
             # self._apply_non_iid_distribution(self.workers, alpha)
             indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
-            for w in self.workers:
+            for w in workers:
                 if w.id in indices_map:
                     w.apply_new_indices(indices_map[w.id], dataset_name)
                     
             print("[Scenario 4] Data setup completed.")
         else:
             # Mặc định là IID (đã được load từ lúc init worker)
-            targets = self._get_raw_targets(dataset_name)
             total_size = len(targets)
             indices = np.arange(total_size)
             np.random.shuffle(indices)
             split_size = total_size // num_workers
             
             indices_map = {i: indices[i * split_size : (i + 1) * split_size].tolist() for i in range(num_workers)}
-            for w in self.workers:
+            for w in workers:
                 if w.id in indices_map:
                     w.apply_new_indices(indices_map[w.id], dataset_name)
             print(" -> IID Partitioning Applied.")
     
-
+    def _get_raw_targets(self, dataset_name):
+        """Helper để tải targets nhanh mà không cần transform ảnh"""
+        root = './data'
+        try:
+            if dataset_name == 'cifar10':
+                # Download=True để đảm bảo data đã có
+                ds = datasets.CIFAR10(root=root, train=True, download=True)
+                return np.array(ds.targets)
+            elif dataset_name == 'mnist':
+                ds = datasets.MNIST(root=root, train=True, download=True)
+                return np.array(ds.targets)
+            elif dataset_name == 'gtsrb':
+                ds = datasets.GTSRB(root=root, split='train', download=True)
+                # GTSRB hơi đặc biệt, target nằm trong list samples
+                return np.array([y for _, y in ds._samples])
+            # Thêm các dataset khác nếu cần
+        except Exception as e:
+            print(f"Error loading raw targets for {dataset_name}: {e}")
+            return []
+        return []
+    
     def setup_network(self):
         """
         Hiện thực hàm setup_network (Bắt buộc).
@@ -187,7 +208,7 @@ class ScenarioExperiment4(BaseScenario):
         Cấu hình tấn công bơm nhiễu Gauss.
         Tham số cần: noise_scale (sigma).
         """
-        noise_scale = self.config.get('noise_scale', 2.0) # Mặc định nhiễu lớn (sigma=2.0)
+        noise_scale = self.config.get('std', 2.0) # Mặc định nhiễu lớn (sigma=2.0)
         
         print(f"Strategy: Model Poisoning (Gauss Noise sigma={noise_scale})")
         

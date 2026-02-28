@@ -659,7 +659,6 @@ class GradientInversionStrategy(AttackStrategy):
             img = tensor.clone().detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
             img = (img - img.min()) / (img.max() - img.min() + 1e-8) # Scale về 0-1
             return img
-
         fig, axes = plt.subplots(1, 2, figsize=(8, 4))
         
         # Ảnh gốc
@@ -675,10 +674,14 @@ class GradientInversionStrategy(AttackStrategy):
         axes[1].axis('off')
         
         # Lấy thông tin để đặt tên file
-        mode = getattr(worker, 'system_mode', 'PROPOSED')
+        mode = getattr(
+            getattr(worker, "config", None),  # lấy worker.config nếu có
+            "aggregation_algorithm",               # lấy config.aggregation_algo nếu có
+            "Proposed"                        # default nếu không tồn tại
+        )
         round_id = getattr(worker, 'current_round', 0)
         
-        filename = f"{mode}_Round{round_id:02d}_Worker{worker.id}.png"
+        filename = f"{mode}_Worker{worker.id}_{mode}.png"
         save_path = os.path.join(self.save_dir, filename)
         
         plt.savefig(save_path)
