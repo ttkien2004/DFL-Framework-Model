@@ -43,7 +43,12 @@ class SimulationEngine:
             "reputation": [],
             "comm_traffic_mb": []
         }
-        
+        # Cấu hình dynamic threshold
+        self.previous_global_acc = 0.0  # Khởi tạo: Vòng đầu chưa có model thì Acc = 0
+        self.base_min_threshold = 0.1   # Ngưỡng tối thiểu tuyệt đối (10% - bằng đoán mò)
+        self.tolerance = 0.15           # Biên độ khoan dung (15%). VD: Nếu Global Acc là 60%, node đạt 45% vẫn được qua.
+        self.currrent_dynamic_threshold = Config.ACC_THRESHOLD
+
     
     def _init_state(self):
         """
@@ -62,6 +67,7 @@ class SimulationEngine:
         # Các biến khác
         self.test_loader = None
         self.blockchain = None
+
     
     def reset_system(self):
         """
@@ -199,7 +205,8 @@ class SimulationEngine:
 
         security_metrics = self._calculate_advanced_metrics(attack_config)
         # print("Exe result", execution_result.keys(), flush=True)
-
+        # Cập nhật previous global acc cho vòng kế tiếp
+        self.previous_global_acc = security_metrics['avg_acc']
         final_result = {
             **execution_result,  # Bung toàn bộ kết quả vận hành (Logs, Topology...)
             **security_metrics,  # Bung toàn bộ chỉ số bảo mật (ASR, TER...),
@@ -316,6 +323,7 @@ class SimulationEngine:
         round_results, real_accuracies, total_traffic = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
 
         # Phase 5: Consensus
+        self.currrent_dynamic_threshold = max(self.base_min_threshold, self.previous_global_acc - self.tolerance) if Config.ENABLE_DYNAMIC else self.currrent_dynamic_threshold # Tính ngưỡng động cho committee
         consensus_results, consensus_log = self._phase_consensus(round_results)
         current_round_cluster_models = {}
         for res in consensus_results:
@@ -566,7 +574,8 @@ class SimulationEngine:
             # Giả lập validate accuracy
             # simulated_acc = min(95.0, 15.0 + round_id * 2.5 + random.uniform(-2, 3))
             accuracies.append(0.0)
-            results.append({"cluster_id": ch.cluster_id, **aggregate_res})
+            members = clusters[ch.cluster_id]
+            results.append({"cluster_id": ch.cluster_id, **aggregate_res, "cluster_head_id": ch.id, "cluster_members": [m.id for m in members]})
             
         return results, accuracies, total_traffic
 
@@ -754,8 +763,9 @@ class SimulationEngine:
         """
         votes = {}
         scores = {}
+        print(f"Current Dynamic threshold {self.currrent_dynamic_threshold}",flush=True)
         for validator in committee:
-            acc,vote = validator.validate_update(model_state, val_loader)
+            acc,vote = validator.validate_update(model_state, val_loader, self.currrent_dynamic_threshold)
             votes[validator.id] = vote
             scores[validator.id] = acc
             print(f" -> Validator {validator.id}: Acc={acc:.4f} | Vote={vote}")
@@ -875,7 +885,6 @@ class SimulationEngine:
             asrs = []
             
             print(f"   Using Target Class {tgt} for Backdoor Eval")
-
             for w in benign_workers:
                 # Gọi hàm
                 m = w.evaluate_backdoor(self.test_loader, target_class=tgt)
@@ -1002,8 +1011,8 @@ class SimulationEngine:
         if not is_attack:
             return response_metrics
         else:
-            response_metrics["tpr"] = 0.0
-            response_metrics["fpr"] = 0.0
+            response_metrics["tpr"] = 0
+            response_metrics["fpr"] = 0
             return response_metrics
     def _calculate_detection_rate(self):
         """
@@ -1023,20 +1032,57 @@ class SimulationEngine:
         total_mal_updates = 0 # Tổng số lần kẻ xấu gửi updates
         total_benign_updates = 0 # Tổng số ng tốt gửi update
 
-        for ch in self.cluster_heads:
-            if not hasattr(ch, 'blocked_ids_this_round'): continue
+        # for ch in self.cluster_heads:
+        #     if not hasattr(ch, 'blocked_ids_this_round'): continue
 
-            blocked_set = ch.blocked_ids_this_round
-            member_ids = set(ch.members)
+        #     blocked_set = ch.blocked_ids_this_round
+        #     member_ids = set(ch.members)
 
-            local_malicious = member_ids.intersection(actual_malicious)
-            local_benign = member_ids.intersection(actual_benign)
+        #     local_malicious = member_ids.intersection(actual_malicious)
+        #     local_benign = member_ids.intersection(actual_benign)
 
-            total_benign_updates += len(local_benign)
-            total_mal_updates += len(local_malicious)
+        #     total_benign_updates += len(local_benign)
+        #     total_mal_updates += len(local_malicious)
 
-            total_blocked_benign += len(blocked_set.intersection(actual_benign))
-            total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+        #     total_blocked_benign += len(blocked_set.intersection(actual_benign))
+        #     total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+        # ==========================================
+        # TRƯỜNG HỢP 1: KỊCH BẢN PROPOSED (Có Cluster Heads)
+        # ==========================================
+        if hasattr(self, 'cluster_heads') and self.cluster_heads:
+            for ch in self.cluster_heads:
+                # Nếu CH chưa có danh sách chặn, bỏ qua
+                if not hasattr(ch, 'blocked_ids_this_round'): continue
+
+                blocked_set = set(ch.blocked_ids_this_round)
+                member_ids = set(ch.members)
+
+                local_malicious = member_ids.intersection(actual_malicious)
+                local_benign = member_ids.intersection(actual_benign)
+
+                total_benign_updates += len(local_benign)
+                total_mal_updates += len(local_malicious)
+
+                total_blocked_benign += len(blocked_set.intersection(actual_benign))
+                total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+
+        # ==========================================
+        # TRƯỜNG HỢP 2: KỊCH BẢN BASELINE (StandardDFL)
+        # ==========================================
+        else:
+            # Trong Baseline, mỗi worker gửi 1 update lên Global/Neighbors
+            total_mal_updates = len(actual_malicious)
+            total_benign_updates = len(actual_benign)
+
+            # Lấy danh sách bị chặn toàn cục (Nếu thuật toán aggregate có ghi nhận)
+            # FedAvg sẽ không có biến này -> blocked_set rỗng -> TPR = 0, FPR = 0 (Hợp lý vì FedAvg không chặn ai)
+            if hasattr(self, 'blocked_ids_this_round'):
+                blocked_set = set(self.blocked_ids_this_round)
+            else:
+                blocked_set = set()
+
+            total_blocked_mal = len(blocked_set.intersection(actual_malicious))
+            total_blocked_benign = len(blocked_set.intersection(actual_benign))
 
         # TPR = TP / (TP + FN) -> Tỷ lệ node xấu bị bắt
         tpr = total_blocked_mal / total_mal_updates if total_mal_updates > 0 else 0.0
@@ -1391,3 +1437,50 @@ class SimulationEngine:
             # print(" -> Metrics saved to disk.")
         except Exception as e:
             print(f"Error saving metrics: {e}")
+
+    # Hàm tính global_acc và global_error_rate
+    def evaluate_global_model(self, global_state_dict):
+        """
+        Đánh giá trực tiếp trọng số toàn cục (Global Model) trên tập Global Test Loader.
+        Trả về dictionary chứa Accuracy, Error Rate và Loss toàn cục.
+        """
+        if not hasattr(self, 'model_template'):
+            # Khởi tạo một model mẫu nếu chưa có (ví dụ: SimpleCNN)
+            # self.model_template = SimpleCNN(num_classes=10)
+            raise ValueError("Cần định nghĩa self.model_template trong __init__ để test Global Model!")
+
+        # 1. Load trọng số toàn cục vào model mẫu
+        self.model_template.load_state_dict(global_state_dict)
+        self.model_template.to(self.device)
+        self.model_template.eval()
+        
+        test_loss = 0.0
+        correct = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for data, target in self.test_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                
+                output = self.model_template(data)
+                
+                # Tính Loss (Cross Entropy)
+                test_loss += self.criterion(output, target).item()
+                
+                # Tính Accuracy
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                total_samples += len(data)
+                
+        avg_loss = test_loss / len(self.test_loader)
+        global_acc = correct / total_samples
+        global_error_rate = 1.0 - global_acc
+
+        # Đưa model về lại CPU để giải phóng VRAM (nếu cần)
+        self.model_template.to('cpu')
+
+        return {
+            "global_accuracy": global_acc,
+            "global_error_rate": global_error_rate,
+            "global_loss": avg_loss
+        }

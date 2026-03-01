@@ -637,7 +637,7 @@ class WorkerNode:
                     batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
                     total_mse += batch_mse
                     
-                    total_samples += len(data)
+                    total_samples += len(target)
 
             # Tổng hợp kết quả
             avg_loss = test_loss / len(test_loader)

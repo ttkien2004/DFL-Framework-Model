@@ -148,7 +148,7 @@ class ScenarioExperiment4(BaseScenario):
     def _setup_backdoor(self,workers, mal_indices, is_dba):
         target_class = self.config.get('target_class', self.config.get('target_label', 0))
         poison_rate = self.config.get('poison_rate', 0.2)
-        scaling_factor = self.config.get('scaling_factor', 10.0) # Model Replacement scale
+        scaling_factor = self.config.get('scaling_factor', 5.0) # Model Replacement scale
 
         attack_config = {
             "target_class": target_class,
