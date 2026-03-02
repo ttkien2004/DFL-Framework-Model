@@ -458,7 +458,7 @@
 															<input
 																type="number"
 																class="form-control"
-																name="target_label"
+																name="target_class"
 																value="5"
 																min="0"
 																max="9"
@@ -1057,7 +1057,7 @@
 						} else if (attackType === "LABEL_FLIPPING") {
 							basePayload.source_class = parseInt(formData.get("source_class"));
 							basePayload.target_class = parseInt(
-								formData.get("target_class_flip"),
+								formData.get("target_class"),
 							);
 						} else if (attackType === "BACKDOOR") {
 							basePayload.target_class = parseInt(
