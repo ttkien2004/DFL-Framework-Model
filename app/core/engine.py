@@ -839,7 +839,13 @@ class SimulationEngine:
         if attack_type == 'LABEL_FLIPPING':
             src = attack_config.get('source_class')
             tgt = attack_config.get('target_class')
+            if src is None or tgt is None:
+                print("[Lỗi] Kịch bản Label Flipping bị thiếu 'source_class' hoặc 'target_class' trong Config!")
+                return self.specific_metrics # Thoát an toàn
             
+            if src is None or tgt is None:
+                print("[Lỗi] Kịch bản Label Flipping bị thiếu 'source_class' hoặc 'target_class' trong Config!", flush=True)
+                return self.specific_metrics # Thoát an toàn
             # Container tạm
             asrs, src_recalls, tgt_precisions = [], [], []
             

@@ -682,11 +682,12 @@ class GradientInversionStrategy(AttackStrategy):
         axes[1].axis('off')
         
         # Lấy thông tin để đặt tên file
-        mode = getattr(
-            getattr(worker, "config", None),  # lấy worker.config nếu có
-            "aggregation_algorithm",               # lấy config.aggregation_algo nếu có
-            "Proposed"                        # default nếu không tồn tại
-        )
+        # mode = getattr(
+        #     getattr(worker, "config", None),  # lấy worker.config nếu có
+        #     "aggregation_algorithm",               # lấy config.aggregation_algo nếu có
+        #     "Proposed"                        # default nếu không tồn tại
+        # )
+        mode = getattr(self.config, "aggregation_algorithm", "Proposed")
         round_id = getattr(worker, 'current_round', 0)
         
         filename = f"{mode}_Worker{worker.id}_{mode}.png"
