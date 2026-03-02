@@ -65,7 +65,13 @@ class Proposer(Validator):
         # 2. Kích hoạt Ủy ban dự phòng
         new_committee = [v for v in old_committee if v.id in active_ids]
 
-        needed = len(old_committee) - len(new_committee)
+        from config import Config
+        try:
+            target_committee_size = Config.COMMITTEE_SIZE - 1
+        except NameError:
+            # Fallback nếu Config chưa được import trực tiếp
+            target_committee_size = len(old_committee)
+        needed = target_committee_size - len(new_committee)
 
         if needed > 0:
             old_ids = {n.id for n in old_committee}
