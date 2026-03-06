@@ -207,6 +207,9 @@ class SimulationEngine:
         # print("Exe result", execution_result.keys(), flush=True)
         # Cập nhật previous global acc cho vòng kế tiếp
         self.previous_global_acc = security_metrics['avg_acc']
+        print("PRev accuracy", self.previous_global_acc, flush=True)
+
+        
         final_result = {
             **execution_result,  # Bung toàn bộ kết quả vận hành (Logs, Topology...)
             **security_metrics,  # Bung toàn bộ chỉ số bảo mật (ASR, TER...),
@@ -218,8 +221,10 @@ class SimulationEngine:
 
     def _run_round_baseline(self, round_id):
         # Pha 1: Training & Attack (Tự động kích hoạt Attack nếu Scenario đã setup)
+        start_time = time.time()
         algo_name = self.engine_config.get('aggregation_algorithm', None)
 
+        t0 = time.time()
         is_coco = True if algo_name and algo_name == "CoCo" else False
         if is_coco:
             n = len(self.workers)
@@ -231,10 +236,12 @@ class SimulationEngine:
             }
             np.fill_diagonal(self.coco_state['A'], 0)
         print("   [Phase 1] Local Training...")
+        
         for w in self.workers:
             w.train()
 
         # Pha 2: Gossip (Truyền tin)
+        t1 = time.time()
         print("   [Phase 2] Gossiping...")
         if is_coco:
             self.coco_state, improved, t_opt = CoCo.optimize_network(self.workers, self.coco_state)
@@ -264,24 +271,36 @@ class SimulationEngine:
         print(f"   -> Total Gossips Sent: {count_gossips}")
         if is_coco: print(f"   -> Estimated Latency: {round_max_latency:.4f}s")
         # Pha 3: Aggregation
+        t2 = time.time()
         print("   [Phase 3] Aggregation...")
-        accuracies = []
         
         for w in self.workers:
-            w.aggregate(current_round_id=round_id) # Gọi hàm aggregate của StandardDFLNode
-            # Đánh giá nhanh (Optional)
-            # acc = w.evaluate(self.test_loader)
-            # accuracies.append(acc)
+            w.aggregate(current_round_id=round_id) # Gọi hàm aggregate của StandardDFLNode            
             
-        # avg_acc = sum(accuracies) / len(accuracies)
-        # print(f"[BASELINE] Round {round_id} finished. Avg Acc: {avg_acc:.4f}")
+        t3 = time.time()
+        execution_time = t3 - start_time
+        # Phân rã thời gian (Latency Breakdown)
+        latency_breakdown = {
+            "time_election": 0.0,         # 0.0
+            "time_clustering": 0.0,     # 0.0
+            "time_training": t1 - t0,         # Thực tế
+            "time_gossip": t2 - t1,          # Thực tế
+            "time_aggregation": t3 - t2,   # Thực tế
+            "time_consensus": 0.0        # 0.0
+        }
+        # Thêm mảng log thời gian nếu chưa có
+        if "latency_breakdown" not in self.logs:
+            self.logs["latency_breakdown"] = []
+        self.logs["latency_breakdown"].append(latency_breakdown)
         return {
             "status": "aggregated",
             "topology": "Dynamic (CoCo)" if is_coco else "Fixed",
             "latency": round_max_latency if is_coco else 0,
             "avg_compression": np.mean(self.coco_state['r']) if is_coco else 1.0,
             "comm_traffic_mb": total_traffic,
-            "hello": "WTF"
+            "execution_time": execution_time,
+            "hello": "WTF",
+            "latency_breakdown": self.logs["latency_breakdown"]
         }
     
     def _run_round_proposed(self, round_id):
@@ -291,6 +310,7 @@ class SimulationEngine:
         start_time = time.time()
         # 2. EXECUTE 5 PHASES
         # ----------------------------------------------------------------------
+        t0 = time.time()
         proposer, committee, active_workers = self._elect_committee(round_id)
         # Proposer sẽ chịu trách nhiệm tạo block ở Phase Consensus
         self.current_proposer = proposer
@@ -303,6 +323,7 @@ class SimulationEngine:
             "committee": [node.id for node in self.current_committee]
         }
         # Phase 1: Clustering
+        t1 = time.time()
         clusters = self._phase_clustering(workers_pools=active_workers,round_id=round_id)
         self.cluster_heads = []
         for members in clusters.values():
@@ -314,15 +335,19 @@ class SimulationEngine:
         for cid, members in clusters.items():
             cluster_map[cid] = [w.id for w in members]
         # Phase 2: Training & LDP
+        t2 = time.time()
         worker_updates_cache, global_train_loss = self._phase_training_ldp(clusters)
 
         # Phase 3: CoCo Optimization
+        t3 = time.time()
         instruction_maps, all_topologies = self._phase_coco_optimization(clusters, worker_updates_cache)
 
         # Phase 4: Gossip & Aggregation
+        t4 =  time.time()
         round_results, real_accuracies, total_traffic = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
 
         # Phase 5: Consensus
+        t5 = time.time()
         self.currrent_dynamic_threshold = max(self.base_min_threshold, self.previous_global_acc - self.tolerance) if Config.ENABLE_DYNAMIC else self.currrent_dynamic_threshold # Tính ngưỡng động cho committee
         consensus_results, consensus_log = self._phase_consensus(round_results)
         current_round_cluster_models = {}
@@ -334,10 +359,10 @@ class SimulationEngine:
         consensus_dist = self._calculate_consensus_distance(self.workers, current_round_cluster_models)
         # Phase 5.1: Lưu cid mới và update k-models cho vòng sau
         self._finalize_round_and_prepare_next(consensus_results)
-
+        t6 = time.time()
         # 3. FINALIZE & RETURN METRICS
         # ----------------------------------------------------------------------
-        execution_time = time.time() - start_time
+        execution_time = t6 - start_time
         avg_accuracy = sum(real_accuracies) / len(real_accuracies) if real_accuracies else 0
         
         print(f"Round {round_id} finished inside Engine in {execution_time:.2f}s")
@@ -347,6 +372,21 @@ class SimulationEngine:
         self.logs["cluster_assignments"].append(cluster_map)
         self.logs["reputation"].append(self.blockchain.reputation_scores.copy())
         self.logs["comm_traffic_mb"].append(total_traffic)
+
+        # Phân rã thời gian (Latency Breakdown)
+        latency_breakdown = {
+            "time_election": t1 - t0,
+            "time_clustering": t2 - t1,
+            "time_training": t3 - t2,
+            "time_gossip": t4 - t3,
+            "time_aggregation": t5 - t4,
+            "time_consensus": t6 - t5
+        }
+        # Thêm mảng log thời gian nếu chưa có
+        if "latency_breakdown" not in self.logs:
+            self.logs["latency_breakdown"] = []
+        self.logs["latency_breakdown"].append(latency_breakdown)
+        
         return {
             "execution_time": execution_time,
             "global_loss": global_train_loss,

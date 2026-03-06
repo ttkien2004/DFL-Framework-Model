@@ -124,7 +124,7 @@ class StandardDFLNode(WorkerNode):
         # Tính kích thước gốc
         original_size_mb = get_model_size_mb(self.model)
         # Nếu chạy CoCo, áp dụng tỷ lệ nén r
-        actual_size_mb = original_size_mb * (self.compression_rate if is_coco_mode else 1.0)
+        actual_size_mb = original_size_mb * (self.compression_ratio if is_coco_mode else 1.0)
 
         for neighbor_id in self.neighbors:
             neighbor = all_workers_dict.get(neighbor_id)
@@ -139,7 +139,7 @@ class StandardDFLNode(WorkerNode):
                     # Chuyển đổi Mbps -> MBps bằng cách chia 8
                     bw = min(self.b_out, neighbor.b_in)
                     if bw > 0:
-                        latency = (self.compression_rate * self.model_size_mb) / (bw / 8.0)
+                        latency = (self.compression_ratio * self.model_size_mb) / (bw / 8.0)
                         if latency > max_latency:
                             max_latency = latency
         traffic_mb = sent_count * actual_size_mb

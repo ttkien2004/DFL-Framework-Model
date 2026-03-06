@@ -719,7 +719,7 @@ class WorkerNode:
                     "accuracy": 0.0,
                     "error_rate": 1.0,
                     "loss": 10000.0,
-                    "asr": 0.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
+                    "asr": 1.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
                 }
         self.model.to(self.device)
         self.model.eval()
