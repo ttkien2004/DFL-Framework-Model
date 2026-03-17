@@ -17,36 +17,63 @@ class ScenarioExperiment1(BaseScenario):
         dataset_name = dataset_name.lower()
         alpha = self.config.get('non_iid_alpha', None) # Lấy alpha từ config
         num_workers = len(workers)
+        num_classes = self.config.get('num_classes', 10)
         
         print(f"[Scenario 1] Setting up Data for {num_workers} workers. Dataset: {dataset_name}, Alpha: {alpha}", flush=True)
 
         # BƯỚC A: Lấy Targets (Nhãn) của toàn bộ dataset
-        # Ta cần load dataset gốc 1 lần để biết phân phối nhãn
-        targets = self._get_raw_targets(dataset_name)
-        
+        train_targets, test_targets = self._get_raw_train_test_targets(dataset_name)
+        train_targets =  np.array(train_targets)
+        test_targets = np.array(test_targets)
         # BƯỚC B: Tính toán phân chia Index
         if alpha is None:
-            # --- Chia IID (Chia đều) ---
+            # --- Chia IID (Chia đều) cho CẢ HAI TẬP ---
             print("   -> Partitioning Mode: IID (Uniform)")
-            total_size = len(targets)
-            indices = np.arange(total_size)
-            split_size = total_size // num_workers
+            train_indices_map = {}
+            test_indices_map = {}
             
-            # Tạo dictionary {worker_id: [indices]}
-            indices_map = {
-                i: indices[i * split_size : (i + 1) * split_size].tolist() 
-                for i in range(num_workers)
-            }
+            # Xử lý Train
+            total_train = len(train_targets)
+            train_idx = np.arange(total_train)
+            np.random.shuffle(train_idx) # Trộn trước khi chia
+            split_train = total_train // num_workers
+            
+            # Xử lý Test
+            total_test = len(test_targets)
+            test_idx = np.arange(total_test)
+            np.random.shuffle(test_idx) # Trộn trước khi chia
+            split_test = total_test // num_workers
+            
+            for i in range(num_workers):
+                train_indices_map[i] = train_idx[i * split_train : (i + 1) * split_train].tolist()
+                test_indices_map[i] = test_idx[i * split_test : (i + 1) * split_test].tolist()
         else:
             # --- Chia Non-IID (Dirichlet) ---
             # Gọi hàm static method bên dưới
-            indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
+            # indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
+            # --- Chia Non-IID (Dirichlet) ĐỒNG BỘ ---
+            print(f"   -> Partitioning Mode: Non-IID (Dirichlet, Alpha={alpha})")
+            # Gọi hàm dirichlet_split_train_test mà chúng ta vừa định nghĩa ở phiên trước
+            train_indices_map, test_indices_map = self.dirichlet_split_train_test(
+                train_labels=train_targets, 
+                test_labels=test_targets, 
+                num_clients=num_workers, 
+                alpha=float(alpha), 
+                num_classes=num_classes
+            )
 
         # BƯỚC C: Áp dụng Index cho từng Worker
         # Worker sẽ tự tạo DataLoader dựa trên list index này
+        # for w in workers:
+        #     if w.id in indices_map:
+        #         w.apply_new_indices(indices_map[w.id], dataset_name)
         for w in workers:
-            if w.id in indices_map:
-                w.apply_new_indices(indices_map[w.id], dataset_name)
+            if w.id in train_indices_map and w.id in test_indices_map:
+                w.apply_new_indices(
+                    train_indices=train_indices_map[w.id], 
+                    test_indices=test_indices_map[w.id], 
+                    dataset_name=dataset_name
+                )
                 
         print("[Scenario 1] Data setup completed.")
 
@@ -82,6 +109,21 @@ class ScenarioExperiment1(BaseScenario):
             print(f"Error loading raw targets for {dataset_name}: {e}")
             return []
         return []
+    
+    def _get_raw_train_test_targets(self, dataset_name):
+        if dataset_name == 'cifar10':
+            # Chỉ tải dataset để mượn mảng targets (nhãn), không cần transform
+            train_dataset = datasets.CIFAR10(root='./data', train=True, download=True)
+            test_dataset = datasets.CIFAR10(root='./data', train=False, download=True)
+            return train_dataset.targets, test_dataset.targets
+            
+        elif dataset_name == 'mnist':
+            train_dataset = datasets.MNIST(root='./data', train=True, download=True)
+            test_dataset = datasets.MNIST(root='./data', train=False, download=True)
+            return train_dataset.targets, test_dataset.targets
+            
+        else:
+            raise ValueError(f"Dataset {dataset_name} chưa được hỗ trợ lấy targets kép.")
     
     @staticmethod
     def partition_dirichlet(targets, num_workers, alpha, seed=42):
