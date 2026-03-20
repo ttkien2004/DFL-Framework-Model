@@ -361,7 +361,7 @@ class SimulationEngine:
                 model_state = res['model_state_dict'] # Model sau khi tái tạo
                 current_round_cluster_models[cid] = model_state
             else:
-                if cid in current_hashes_on_chain:
+                if cid in current_hashes_on_chain:                    
                     old_hash = current_hashes_on_chain[cid]
                     old_model_state = self.storage.download_model(old_hash)
                     if old_model_state:
@@ -1413,18 +1413,11 @@ class SimulationEngine:
             is_good_update=is_approved
         )
 
-        if not is_approved:
-            return f"Cluster {cluster_id}: Rejected by Vote ({approved_votes}/{total_votes})"
+        # if not is_approved:
+        #     return f"Cluster {cluster_id}: Rejected by Vote ({approved_votes}/{total_votes})"
 
         # Bước 5: Tạo BLOCK mới
-        storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
-
-        block_data = {
-            "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
-            "model_hash": res['model_hash'],
-            "storage_uri": storage_path,
-            "votes": votes,
-        }
+        storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash']) if is_approved else None
         
         # new_block = self.blockchain.add_block(
         #     block_data
@@ -1432,7 +1425,7 @@ class SimulationEngine:
         
         # return f"Cluster {cluster_id}: Accepted (Block {new_block.index})"
         return {
-            "status": "ACCEPTED",
+            "status": "ACCEPTED" if is_approved else "REJECTED",
             "cluster_id": cluster_id,
             "data": {
                 "accuracy": final_acc,

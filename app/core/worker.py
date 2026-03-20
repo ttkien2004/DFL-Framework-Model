@@ -1174,7 +1174,6 @@ class WorkerNode:
         if not k_models_dict or not hasattr(self, 'local_test_loader') or self.local_test_loader is None:
             return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
 
-        print("There is test loader", flush=True)
         best_loss = float('inf')
         best_acc = 0.0
         best_cid = None

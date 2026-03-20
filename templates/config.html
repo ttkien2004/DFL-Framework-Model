@@ -128,7 +128,10 @@
 											</div>
 											<div class="col-md-6 d-none" id="baselineAlgorithmGroup">
 												<label class="form-label"> Baseline Algorithm </label>
-												<select class="form-select" name="baseline_algorithm">
+												<select
+													class="form-select"
+													name="aggregation_algorithm"
+												>
 													<option value="FED_AVG">FedAvg (Cơ bản)</option>
 													<option value="CoCo">
 														CoCo (Compression Consensus - Baseline)
@@ -164,6 +167,7 @@
 														ResNet-18 (Cho CIFAR)
 													</option>
 													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
 												</select>
 											</div>
 										</div>
@@ -767,6 +771,11 @@
 						reset: initialReset,
 					};
 
+					if (basePayload.system_mode === "BASELINE") {
+						basePayload.aggregation_algorithm = formData.get(
+							"aggregation_algorithm",
+						);
+					}
 					console.log(`Bắt đầu chạy ${targetRounds} vòng...`);
 
 					// try {
@@ -1056,9 +1065,7 @@
 							basePayload.std = parseFloat(formData.get("std"));
 						} else if (attackType === "LABEL_FLIPPING") {
 							basePayload.source_class = parseInt(formData.get("source_class"));
-							basePayload.target_class = parseInt(
-								formData.get("target_class"),
-							);
+							basePayload.target_class = parseInt(formData.get("target_class"));
 						} else if (attackType === "BACKDOOR") {
 							basePayload.target_class = parseInt(
 								formData.get("target_class_backdoor"),
