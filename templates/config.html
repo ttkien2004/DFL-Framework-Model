@@ -597,6 +597,7 @@
 												<select class="form-select" name="dataset">
 													<option value="mnist" selected>MNIST</option>
 													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
 												</select>
 											</div>
 											<div class="col-md-4">
@@ -606,6 +607,9 @@
 														Simple CNN
 													</option>
 													<option value="resnet18">ResNet-18</option>
+													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
 												</select>
 											</div>
 											<div class="col-md-4">
@@ -1050,6 +1054,7 @@
 							batch_size: parseInt(formData.get("batch_size")),
 							learning_rate: parseFloat(formData.get("learning_rate")),
 							target_rounds: targetRounds, // Gửi số vòng lên server
+							num_classes: 2,
 							reset: initialReset,
 						};
 

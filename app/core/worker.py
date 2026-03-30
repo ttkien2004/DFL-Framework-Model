@@ -10,6 +10,7 @@ from app.utils.data_loader import get_dataloader, get_dataloader_from_indices
 from app.models.cnn import get_model
 import torch.nn.functional as F
 from app.core.ipfs import StorageService
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 # Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
     def __init__(self, node_id, config, device):
@@ -19,7 +20,7 @@ class WorkerNode:
         # self.data_loader = data_loader
         self.dataset_name = config.get('dataset', 'cifar10')
         self.batch_size = config.get('batch_size', 32)
-        self.epochs = config.get('epochs',5)
+        self.epochs = config.get('epochs',1)
         self.epoch_loss = 0.0
         self.local_test_loader = None
         
@@ -950,11 +951,11 @@ class WorkerNode:
 
     def evaluate_label_flipping(self, src_class, tgt_class, k_models_dict=None, custom_test_loader=None):
         """
-        Đánh giá Label Flipping (ASR, Recall, Precision).
+        Đánh giá Label Flipping (ASR, Recall, Precision) kết hợp F1-Score và AUC.
         """
         loader = custom_test_loader if custom_test_loader is not None else getattr(self, 'local_test_loader', None)
         if loader is None:
-            return {"accuracy": 0.0, "error_rate": 1.0, "src_recall": 0.0, "asr": 1.0, "tgt_precision": 0.0}
+            return {"accuracy": 0.0, "error_rate": 1.0, "src_recall": 0.0, "asr": 1.0, "tgt_precision": 0.0, "f1": 0.0, "auc": 0.5}
 
         original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
         self.model.to(self.device)
@@ -990,15 +991,29 @@ class WorkerNode:
             src_total, src_correct, src_flipped_to_tgt = 0, 0, 0
             tgt_pred_total, tgt_true_positive = 0, 0
             
+            # Khởi tạo mảng lưu trữ cho F1 và AUC
+            all_targets = []
+            all_preds = []
+            all_probs = []
+
             with torch.no_grad():
                 for data, target in loader:
                     data, target = data.to(self.device), target.to(self.device)
                     logits = self.model(data)
+                    probs = F.softmax(logits, dim=1) # Tính xác suất cho AUC
                     preds = logits.argmax(dim=1)
                     
+                    # 1. Thu thập dữ liệu mảng cho sklearn (F1, AUC)
+                    all_targets.extend(target.cpu().numpy())
+                    all_preds.extend(preds.cpu().numpy())
+                    all_probs.extend(probs.cpu().numpy())
+
+                    # 2. Logic tính toán cơ bản (Accuracy)
                     correct += preds.eq(target).sum().item()
                     total += len(target)
 
+                    # 3. Logic Label Flipping (ASR, Recall, Precision)
+                    # print(target, src_class, "Check SRC CLASS", flush=True)
                     src_mask = (target == src_class)
                     src_total += src_mask.sum().item()
                     src_correct += (preds[src_mask] == src_class).sum().item()
@@ -1008,13 +1023,46 @@ class WorkerNode:
                     tgt_pred_total += tgt_pred_mask.sum().item()
                     tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
 
+            # --- TÍNH TOÁN KẾT QUẢ CUỐI CÙNG ---
             acc = correct / total if total > 0 else 0.0
+            
+            # Tính F1-Score (Dùng macro cho môi trường phân loại đa lớp / imbalanced)
+            f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+            
+            # Tính AUC-ROC (Bắt lỗi ValueError nếu tập test cục bộ chỉ có 1 nhãn do Non-IID quá gắt)
+            try:
+                # Tìm số lượng class thực tế có trong tập dự đoán
+                num_unique_classes = len(np.unique(all_targets))
+                
+                if num_unique_classes > 2:
+                    # TRƯỜNG HỢP: CIFAR-10, MNIST, HAR (Multi-class)
+                    auc = roc_auc_score(all_targets, all_probs, multi_class='ovr', average='macro')
+                elif num_unique_classes == 2:
+                    # TRƯỜNG HỢP: Health Dataset (Binary Class 0 và 1)
+                    # Chú ý: Ở binary, hàm roc_auc_score chỉ nhận xác suất của class Positive (class 1)
+                    # Nên ta phải lấy cột index 1 của ma trận xác suất: [:, 1]
+                    all_probs_np = np.array(all_probs)
+                    if all_probs_np.shape[1] > 1: # Đảm bảo mảng probs có đủ 2 cột
+                        auc = roc_auc_score(all_targets, all_probs_np[:, 1])
+                    else:
+                        auc = 0.5
+                else:
+                    # TRƯỜNG HỢP CỰC ĐOAN: Test set chỉ có duy nhất 1 nhãn (Do Non-IID quá gắt)
+                    auc = 0.5 
+                    
+            except ValueError as e:
+                # print(f"Lỗi tính AUC: {e}") # Bỏ comment dòng này nếu muốn xem lỗi chi tiết
+                auc = 0.5
+
+            # print(src_correct, src_total, flush=True)
             return {
                 "accuracy": acc,
                 "error_rate": 1.0 - acc,
                 "src_recall": src_correct / (src_total + 1e-9),
                 "asr": src_flipped_to_tgt / (src_total + 1e-9),
-                "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9)
+                "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9),
+                "f1": f1,
+                "auc": auc
             }
         finally:
             self.model.load_state_dict(original_state)
@@ -1225,4 +1273,4 @@ class WorkerNode:
             "error_rate": 1.0 - best_acc,
             "loss": best_loss,
             "best_cluster_id": best_cid
-        }
+        }    

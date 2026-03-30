@@ -7,6 +7,7 @@ from app.core.attacks import (
 import random
 import numpy as np
 from torchvision import datasets, transforms
+from app.utils.data_loader import get_raw_dataset
 
 class ScenarioExperiment4(BaseScenario):
     _DIRICHLET_INDICES_CACHE = {}
@@ -81,7 +82,7 @@ class ScenarioExperiment4(BaseScenario):
 
     def setup_data(self, workers, dataset_name):
         dataset_name = dataset_name.lower()
-        alpha = self.config.get('non_iid_alpha', None) # Lấy alpha từ config
+        alpha = self.config.get('non_iid_alpha', 0.7) # Lấy alpha từ config
         num_workers = len(workers)
         num_classes = self.config.get('num_classes', 10)
         
@@ -174,6 +175,14 @@ class ScenarioExperiment4(BaseScenario):
         elif dataset_name == 'mnist':
             train_dataset = datasets.MNIST(root='./data', train=True, download=True)
             test_dataset = datasets.MNIST(root='./data', train=False, download=True)
+            return train_dataset.targets, test_dataset.targets
+        elif dataset_name == 'health':
+            # Bạn cần import hàm get_raw_dataset từ file dataset loader của bạn vào đây
+            # Ví dụ: from app.utils.data_loader import get_raw_dataset
+            train_dataset = get_raw_dataset('health', train=True)
+            test_dataset = get_raw_dataset('health', train=False)
+            
+            # Trả về 2 mảng nhãn nhờ thuộc tính .targets ta đã bơm vào lúc nãy
             return train_dataset.targets, test_dataset.targets
             
         else:

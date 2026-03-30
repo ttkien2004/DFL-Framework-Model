@@ -204,7 +204,7 @@ class SimulationEngine:
             execution_result = self._run_round_proposed(round_id)
             current_round_cluster_models = execution_result['current_round_k_models']
 
-        security_metrics = self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models)
+        security_metrics = self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models) if self.system_mode != 'BASELINE' else self._calculate_advanced_metrics(attack_config, current_round_cluster_models=None)
         # print("Exe result", execution_result.keys(), flush=True)
         # Cập nhật previous global acc cho vòng kế tiếp
         self.previous_global_acc = security_metrics['avg_acc']
@@ -888,35 +888,36 @@ class SimulationEngine:
             return sum(clean_vals) / len(clean_vals) if clean_vals else default
 
         if attack_type == 'LABEL_FLIPPING':
-            src = attack_config.get('source_class')
-            tgt = attack_config.get('target_class')
+            src = int(attack_config.get('source_class'))
+            tgt = int(attack_config.get('target_class'))
             if src is None or tgt is None:
                 print("[Lỗi] Kịch bản Label Flipping bị thiếu 'source_class' hoặc 'target_class' trong Config!")
                 return self.specific_metrics # Thoát an toàn
             
-            if src is None or tgt is None:
-                print("[Lỗi] Kịch bản Label Flipping bị thiếu 'source_class' hoặc 'target_class' trong Config!", flush=True)
-                return self.specific_metrics # Thoát an toàn
             # Container tạm
-            asrs, src_recalls, tgt_precisions = [], [], []
+            asrs, src_recalls, tgt_precisions, f1s, aucs = [], [], [], [], []
             
             for w in benign_workers:
                 if self.system_mode == "PROPOSED":
                     # m = w.evaluate_label_flipping(self.test_loader, src, tgt)
-                    m = w.evaluate_label_flipping(src, tgt, current_round_cluster_models)
+                    m = w.evaluate_label_flipping(src, tgt, current_round_cluster_models, self.test_loader)
                 else:
-                    m = w.evaluate_label_flipping(src, tgt, None)
+                    m = w.evaluate_label_flipping(src, tgt, None, self.test_loader)
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
                 asrs.append(m['asr'])
                 src_recalls.append(m['src_recall'])
                 tgt_precisions.append(m['tgt_precision'])
+                f1s.append(m['f1'])
+                aucs.append(m['auc'])
             
             # Tổng hợp
             self.specific_metrics = {
                 "asr": sum(asrs) / len(asrs),
                 "src_recall": sum(src_recalls) / len(src_recalls),
-                "tgt_precision": sum(tgt_precisions) / len(tgt_precisions)
+                "tgt_precision": sum(tgt_precisions) / len(tgt_precisions),
+                "f1": safe_mean(f1s),
+                "auc": safe_mean(aucs)
             }
 
         elif attack_type in ['GAUSSIAN_MODEL_POISONING', 'MODEL_POISONING']:
@@ -1106,8 +1107,8 @@ class SimulationEngine:
         if not is_attack:
             return response_metrics
         else:
-            response_metrics["tpr"] = 0
-            response_metrics["fpr"] = 0
+            response_metrics["tpr"] = 0.0
+            response_metrics["fpr"] = 0.0
             return response_metrics
     def _calculate_detection_rate(self):
         """

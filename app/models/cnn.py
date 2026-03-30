@@ -30,6 +30,8 @@ def get_model(model_name, num_classes=10):
         return SimpleCNN(num_classes=num_classes)
     elif model_name == 'resnet20':
         return ResNet20(num_classes=num_classes)
+    elif model_name == 'health_mlp':
+        return HealthMLP(num_classes=num_classes)
         
     else:
         raise ValueError(f"Unknown model name: {model_name}")
@@ -179,3 +181,77 @@ class ResNet20(nn.Module):
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
+
+class HarMLP(nn.Module):
+    def __init__(self, input_dim=561, num_classes=6): 
+        # UCI HAR có 561 đặc trưng 1D và 6 nhãn hành vi (Walking, Sitting, Laying,...)
+        super(HarMLP, self).__init__()
+        
+        # Lớp ẩn 1: Tăng cường trích xuất đặc trưng
+        self.fc1 = nn.Linear(input_dim, 256)
+        self.ln1 = nn.LayerNorm(256) # Dùng LayerNorm thân thiện với Federated Learning
+        
+        # Lớp ẩn 2
+        self.fc2 = nn.Linear(256, 128)
+        self.ln2 = nn.LayerNorm(128)
+        
+        # Lớp ẩn 3
+        self.fc3 = nn.Linear(128, 64)
+        self.ln3 = nn.LayerNorm(64)
+        
+        # Lớp phân loại đầu ra
+        self.fc_out = nn.Linear(64, num_classes)
+        
+        # Dropout chống học vẹt (Overfitting) do dữ liệu IoT thường nhiễu
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        # Đảm bảo input x là tensor 2D: (batch_size, 561)
+        x = x.view(x.size(0), -1) 
+        
+        x = F.relu(self.ln1(self.fc1(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln2(self.fc2(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln3(self.fc3(x)))
+        x = self.dropout(x)
+        
+        x = self.fc_out(x)
+        return x
+    
+class HealthMLP(nn.Module):
+    def __init__(self, input_dim=36, num_classes=2): 
+        super(HealthMLP, self).__init__()
+        
+        # Lớp ẩn 1
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.ln1 = nn.LayerNorm(128)
+        
+        # Lớp ẩn 2
+        self.fc2 = nn.Linear(128, 64)
+        self.ln2 = nn.LayerNorm(64)
+        
+        # Lớp ẩn 3
+        self.fc3 = nn.Linear(64, 32)
+        self.ln3 = nn.LayerNorm(32)
+        
+        # Phân loại đầu ra (Anomaly hay Normal)
+        self.fc_out = nn.Linear(32, num_classes)
+        
+        # Dropout để chống Overfitting trên thiết bị IoT
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = F.relu(self.ln1(self.fc1(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln2(self.fc2(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln3(self.fc3(x)))
+        x = self.dropout(x)
+        
+        x = self.fc_out(x)
+        return x
