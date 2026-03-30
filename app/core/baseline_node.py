@@ -1,4 +1,5 @@
 import copy
+import torch
 from app.core.worker import WorkerNode
 from app.core.baseline_aggregation import AggregationAlgorithms
 from app.utils.helpers import get_model_size_mb
@@ -30,9 +31,10 @@ class StandardDFLNode(WorkerNode):
 
     def aggregate(self, current_round_id=0):
         """
-        Tổng hợp mô hình từ hàng xóm sử dụng thuật toán được cấu hình.
+        Tổng hợp mô hình từ hàng xóm.
+        ✅ OPTIMIZED: Aggregation algorithms now support GPU directly
         """
-        # 1. Thu thập updates
+        # 1. Thu thập updates từ neighbors
         valid_updates = list(self.received_updates.values())
         
         # Thêm chính mình
@@ -42,8 +44,9 @@ class StandardDFLNode(WorkerNode):
         # 2. Chọn thuật toán (FedAvg, Krum, Median...)
         algo_name = self.config.get('aggregation_algorithm', 'FED_AVG')
         
-        # print(f"   [Node {self.id}] Aggregating {len(valid_updates)} models using {algo_name}")
-
+        # Đảm bảo model ở trên device
+        self.model = self.model.to(self.device)
+        
         aggregated_model = None
         if algo_name == 'FED_AVG':
             aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
@@ -54,45 +57,40 @@ class StandardDFLNode(WorkerNode):
         elif algo_name == 'TRIMMED_MEAN':
             aggregated_model = AggregationAlgorithms.trimmed_mean(valid_updates)
         elif algo_name == 'FL_TRUST':
-            # Với DFL thường, node tin tưởng bản thân nó nhất
             aggregated_model = AggregationAlgorithms.fl_trust(valid_updates, server_update=my_update)
         elif algo_name == 'UBAR':
-            # --- CHUẨN BỊ DỮ LIỆU CHO UBAR ---
-            # Cần lấy 1 batch từ data_loader để tính loss
+            # UBAR sử dụng GPU
             try:
-                # Tạo iterator tạm thời để lấy 1 batch
                 data_iter = iter(self.data_loader)
                 data_batch = next(data_iter)
             except Exception as e:
                 print(f"[Node {self.id}] Cannot fetch batch for UBAR: {e}")
-                # Fallback nếu lỗi data: dùng FedAvg
                 data_batch = None
             
             if data_batch:
-                # Gọi UBAR static method
-                self.model.to(self.device)
+                # 🔑 CHANGE: Keep model on GPU - don't move to CPU after
                 try:
                     aggregated_model = AggregationAlgorithms.ubar(
                         own_state_dict=my_update,
-                        neighbor_updates=valid_updates, # Danh sách weights hàng xóm
-                        model_template=self.model,      # Dùng model của mình làm khuôn
+                        neighbor_updates=valid_updates,
+                        model_template=self.model,
                         data_batch=data_batch,
                         criterion=self.criterion,
                         device=self.device,
-                        rho=self.config.get('ubar_rho', 0.5) # Config tỷ lệ tin cậy
+                        rho=self.config.get('ubar_rho', 0.5)
                     )
-                finally:
-                    self.model.to('cpu')
-                
-                # UBAR dùng self.model để thử weights hàng xóm
-                # Nên sau khi chạy xong, self.model đang chứa weights lung tung.
-                # Cần load lại ngay kết quả đúng.
-                self.model.load_state_dict(aggregated_model)
+                    # Load aggregated model but KEEP on GPU
+                    self.model.load_state_dict(aggregated_model)
+                except Exception as e:
+                    print(f"[Node {self.id}] UBAR failed: {e}. Falling back to FED_AVG")
+                    aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
+                    self.model.load_state_dict(aggregated_model)
             else:
                 aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
+                self.model.load_state_dict(aggregated_model)
         elif algo_name == "BALANCE":
             gamma = self.config.get("BALANCE_GAMMA", 0.3)
-            lambda_val = self.config.get("BALANCE_LAMBDA",1.0)
+            lambda_val = self.config.get("BALANCE_LAMBDA", 1.0)
             total_rounds = self.config.get("NUM_ROUNDS", 100)
             aggregated_model = AggregationAlgorithms.balance(
                 updates=valid_updates,
@@ -104,11 +102,16 @@ class StandardDFLNode(WorkerNode):
         else:
             aggregated_model = AggregationAlgorithms.fed_avg(valid_updates)
 
-        # 3. Cập nhật model
+        # 3. Cập nhật model và GIỮ TRÊN GPU
         self.model.load_state_dict(aggregated_model)
+        self.model = self.model.to(self.device)
         
         # Reset buffer cho vòng sau
         self.received_updates = {}
+        
+        # 🔑 CHANGE: Return model but KEEP on GPU (don't move to CPU)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         return aggregated_model
     
@@ -124,7 +127,7 @@ class StandardDFLNode(WorkerNode):
         # Tính kích thước gốc
         original_size_mb = get_model_size_mb(self.model)
         # Nếu chạy CoCo, áp dụng tỷ lệ nén r
-        actual_size_mb = original_size_mb * (self.compression_rate if is_coco_mode else 1.0)
+        actual_size_mb = original_size_mb * (self.compression_ratio if is_coco_mode else 1.0)
 
         for neighbor_id in self.neighbors:
             neighbor = all_workers_dict.get(neighbor_id)
@@ -139,7 +142,7 @@ class StandardDFLNode(WorkerNode):
                     # Chuyển đổi Mbps -> MBps bằng cách chia 8
                     bw = min(self.b_out, neighbor.b_in)
                     if bw > 0:
-                        latency = (self.compression_rate * self.model_size_mb) / (bw / 8.0)
+                        latency = (self.compression_ratio * self.model_size_mb) / (bw / 8.0)
                         if latency > max_latency:
                             max_latency = latency
         traffic_mb = sent_count * actual_size_mb

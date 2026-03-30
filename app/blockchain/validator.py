@@ -25,7 +25,7 @@ class Validator(WorkerNode):
                 x = x.to(self.device)
                 self.model(x) # Chỉ cần forward pass, số liệu BN sẽ tự nhảy
 
-    def validate_update(self, model_state_dict, val_loader):
+    def validate_update(self, model_state_dict, val_loader, dynamic_threshold):
         # 1. KIỂM TRA NHANH: Weights có bị NaN/Inf không?
         for name, param in model_state_dict.items():
             if torch.isnan(param).any() or torch.isinf(param).any():
@@ -75,7 +75,8 @@ class Validator(WorkerNode):
             # Lưu ý: threshold trong file config có thể là 0.5 (50%) hoặc 50.0. Hãy kiểm tra kỹ.
             # Nếu threshold là số float nhỏ (0.5), hãy so sánh: acc/100 >= threshold
             # Ở đây giả sử Config để 50.0
-            vote = acc >= threshold
+            dynamic_threshold = 100.0 * dynamic_threshold if dynamic_threshold < 1 else dynamic_threshold         
+            vote = acc >= dynamic_threshold
             
             print(f"[Validator {self.id}] Validated: Acc={acc:.2f}% | Vote={vote}")
             return acc, vote

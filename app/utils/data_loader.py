@@ -1,6 +1,10 @@
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, random_split
+import pandas as pd
+import os
+from sklearn.preprocessing import StandardScaler
+import numpy as np
 
 # =========================================================================
 # 1. HÀM LÕI (CORE FUNCTION) - Private
@@ -48,7 +52,26 @@ def _get_dataset_core(dataset_name, train=True):
             return ds, 43, 3
         except:
             return None, 43, 3
-
+    elif dataset_name == 'health':
+        csv_path = os.path.join(root, 'personal_health_data.csv')
+        full_dataset = PersonalHealthDataset(csv_path)
+        
+        # Cắt 80-20 VỚI SEED CỐ ĐỊNH (Quan trọng: Đảm bảo Train/Test không bị trộn lẫn giữa các lần gọi)
+        train_size = int(0.8 * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        generator = torch.Generator().manual_seed(42) # Cố định hạt giống random
+        train_ds, test_ds = random_split(full_dataset, [train_size, test_size], generator=generator)
+        
+        # Chọn tập trả về và "Bơm" thuộc tính targets để hàm Dirichlet đọc được
+        if train:
+            ds = train_ds
+            ds.targets = np.array([full_dataset.y[i].item() for i in train_ds.indices])
+        else:
+            ds = test_ds
+            ds.targets = np.array([full_dataset.y[i].item() for i in test_ds.indices])
+            
+        # Trả về: dataset, num_classes=2, input_channels=36 (36 cột features)
+        return ds, 2, 36
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
@@ -83,6 +106,10 @@ def get_dataloader_from_indices(dataset_name, indices, batch_size=32, train=True
                       Nếu cần test loader cho worker thì truyền False.
     """
     # Gọi hàm lõi để lấy dataset
+    if len(indices) == 0:
+        print(f"[Cảnh báo] Một Worker nhận được 0 samples (Train={train}) do Dirichlet!")
+        # Trả về None để Worker biết mà bỏ qua
+        return None, 2, 36 # 2 classes, 36 channels cho health dataset
     dataset, num_classes, input_channels = _get_dataset_core(dataset_name, train=train)
     
     if dataset is None:
@@ -93,7 +120,8 @@ def get_dataloader_from_indices(dataset_name, indices, batch_size=32, train=True
     
     # Tạo Loader
     # drop_last=True để tránh lỗi BatchNorm với batch nhỏ lẻ
-    loader = DataLoader(subset, batch_size=batch_size, shuffle=True, drop_last=True)
+    should_drop_last = True if len(indices) >= batch_size else False
+    loader = DataLoader(subset, batch_size=batch_size, shuffle=True, drop_last=should_drop_last)
     
     return loader, num_classes, input_channels
 
@@ -126,3 +154,41 @@ def get_global_test_loader(dataset_name, batch_size=32):
     
     # Tạo DataLoader chuẩn
     return DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+
+# =========================================================================
+# 0. CLASS TÙY CHỈNH CHO DATASET SỨC KHỎE (DỮ LIỆU BẢNG)
+# =========================================================================
+class PersonalHealthDataset(torch.utils.data.Dataset):
+    def __init__(self, csv_file='./data/personal_health_data.csv'):
+        # Nếu không có file, báo lỗi rõ ràng
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(f"Không tìm thấy file {csv_file}. Vui lòng bỏ file vào thư mục ./data/")
+            
+        df = pd.read_csv(csv_file)
+        
+        # Xử lý Missing Values
+        df['Medical_Conditions'] = df['Medical_Conditions'].fillna('None')
+        df['Alcohol_Consumption'] = df['Alcohol_Consumption'].fillna('None')
+        
+        # Bỏ ID và Timestamp
+        df = df.drop(['User_ID', 'Timestamp'], axis=1)
+        
+        # Tách X, y
+        X = df.drop('Anomaly_Flag', axis=1)
+        y = df['Anomaly_Flag'].values
+        
+        # One-hot encoding
+        X = pd.get_dummies(X, drop_first=True)
+        
+        # Scale dữ liệu
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        self.X = torch.FloatTensor(X_scaled)
+        self.y = torch.LongTensor(y)
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]

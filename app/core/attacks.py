@@ -122,10 +122,11 @@ class FreeRidingStrategy(AttackStrategy):
 
 class LabelFlippingStrategy(AttackStrategy):
     """Kẻ đảo nhãn: Train nhưng sửa nhãn dữ liệu"""
-    def __init__(self, source_class, target_class, scale_factor=15.0):
+    def __init__(self, source_class, target_class, scale_factor=2.0, poison_rate=0.5):
         self.source_class = source_class
         self.target_class = target_class
         self.scale_factor = scale_factor
+        self.poison_rate = poison_rate
 
     def execute(self, worker):
         print(f"Worker {worker.id}: Label Flipping Attack")
@@ -167,8 +168,15 @@ class LabelFlippingStrategy(AttackStrategy):
     def _create_poisoned_dataloader(self, original_loader):
         poisoned_data = []
         for data,target in original_loader:
+            # Tạo mask ngẫu nhiên để chỉ lật một tỷ lệ phần trăm nhất định
+            mask = (target == self.source_class)
+            
+            # Sinh ra một tensor xác suất để lật ngẫu nhiên (dựa trên poison_rate)
+            rand_tensor = torch.rand(target.shape, device=target.device)
+            flip_mask = mask & (rand_tensor < self.poison_rate)
+
             poisoned_target = torch.where(
-                target == self.source_class,
+                flip_mask,
                 torch.tensor(self.target_class, device=target.device),
                 target
             )
@@ -674,11 +682,12 @@ class GradientInversionStrategy(AttackStrategy):
         axes[1].axis('off')
         
         # Lấy thông tin để đặt tên file
-        mode = getattr(
-            getattr(worker, "config", None),  # lấy worker.config nếu có
-            "aggregation_algorithm",               # lấy config.aggregation_algo nếu có
-            "Proposed"                        # default nếu không tồn tại
-        )
+        # mode = getattr(
+        #     getattr(worker, "config", None),  # lấy worker.config nếu có
+        #     "aggregation_algorithm",               # lấy config.aggregation_algo nếu có
+        #     "Proposed"                        # default nếu không tồn tại
+        # )
+        mode = getattr(self.config, "aggregation_algorithm", "Proposed")
         round_id = getattr(worker, 'current_round', 0)
         
         filename = f"{mode}_Worker{worker.id}_{mode}.png"

@@ -7,6 +7,7 @@ from app.core.attacks import (
 import random
 import numpy as np
 from torchvision import datasets, transforms
+from app.utils.data_loader import get_raw_dataset
 
 class ScenarioExperiment4(BaseScenario):
     _DIRICHLET_INDICES_CACHE = {}
@@ -44,40 +45,104 @@ class ScenarioExperiment4(BaseScenario):
         else:
             print(f"Warning: Unknown attack type '{attack_type}'. No attack applied.")
     
-    def setup_data(self, workers, dataset_name):
-        """
-        Hiện thực hàm setup_data (Bắt buộc).
-        Quyết định phân phối dữ liệu (IID hoặc Non-IID).
-        """
-        dist_type = self.config.get('distribution', 'IID').upper()
-        alpha = self.config.get('non_iid_alpha', 0.5)
-        num_workers = len(workers)
+    # def setup_data(self, workers, dataset_name):
+    #     """
+    #     Hiện thực hàm setup_data (Bắt buộc).
+    #     Quyết định phân phối dữ liệu (IID hoặc Non-IID).
+    #     """
+    #     dist_type = self.config.get('distribution', 'IID').upper()
+    #     alpha = self.config.get('non_iid_alpha', 0.5)
+    #     num_workers = len(workers)
         
-        print(f"Setting up Data: {dist_type} (alpha={alpha})")
+    #     print(f"Setting up Data: {dist_type} (alpha={alpha})")
         
-        # Nếu là Non-IID thì gọi hàm chia lại dữ liệu (giả sử bạn có hàm này)
-        # Nếu không có logic đặc biệt thì chỉ cần pass hoặc log ra
-        targets = self._get_raw_targets(dataset_name)
-        if alpha is not None:
-            # self._apply_non_iid_distribution(self.workers, alpha)
-            indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
-            for w in workers:
-                if w.id in indices_map:
-                    w.apply_new_indices(indices_map[w.id], dataset_name)
+    #     # Nếu là Non-IID thì gọi hàm chia lại dữ liệu (giả sử bạn có hàm này)
+    #     # Nếu không có logic đặc biệt thì chỉ cần pass hoặc log ra
+    #     targets = self._get_raw_targets(dataset_name)
+    #     if alpha is not None:
+    #         # self._apply_non_iid_distribution(self.workers, alpha)
+    #         indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
+    #         for w in workers:
+    #             if w.id in indices_map:
+    #                 w.apply_new_indices(indices_map[w.id], dataset_name)
                     
-            print("[Scenario 4] Data setup completed.")
-        else:
-            # Mặc định là IID (đã được load từ lúc init worker)
-            total_size = len(targets)
-            indices = np.arange(total_size)
-            np.random.shuffle(indices)
-            split_size = total_size // num_workers
+    #         print("[Scenario 4] Data setup completed.")
+    #     else:
+    #         # Mặc định là IID (đã được load từ lúc init worker)
+    #         total_size = len(targets)
+    #         indices = np.arange(total_size)
+    #         np.random.shuffle(indices)
+    #         split_size = total_size // num_workers
             
-            indices_map = {i: indices[i * split_size : (i + 1) * split_size].tolist() for i in range(num_workers)}
-            for w in workers:
-                if w.id in indices_map:
-                    w.apply_new_indices(indices_map[w.id], dataset_name)
-            print(" -> IID Partitioning Applied.")
+    #         indices_map = {i: indices[i * split_size : (i + 1) * split_size].tolist() for i in range(num_workers)}
+    #         for w in workers:
+    #             if w.id in indices_map:
+    #                 w.apply_new_indices(indices_map[w.id], dataset_name)
+    #         print(" -> IID Partitioning Applied.")
+
+    def setup_data(self, workers, dataset_name):
+        dataset_name = dataset_name.lower()
+        alpha = self.config.get('non_iid_alpha', 0.7) # Lấy alpha từ config
+        num_workers = len(workers)
+        num_classes = self.config.get('num_classes', 10)
+        
+        print(f"[Scenario 4] Setting up Data for {num_workers} workers. Dataset: {dataset_name}, Alpha: {alpha}", flush=True)
+
+        # BƯỚC A: Lấy Targets (Nhãn) của toàn bộ dataset
+        train_targets, test_targets = self._get_raw_train_test_targets(dataset_name)
+        train_targets =  np.array(train_targets)
+        test_targets = np.array(test_targets)
+        # BƯỚC B: Tính toán phân chia Index
+        if alpha is None:
+            # --- Chia IID (Chia đều) cho CẢ HAI TẬP ---
+            print("   -> Partitioning Mode: IID (Uniform)")
+            train_indices_map = {}
+            test_indices_map = {}
+            
+            # Xử lý Train
+            total_train = len(train_targets)
+            train_idx = np.arange(total_train)
+            np.random.shuffle(train_idx) # Trộn trước khi chia
+            split_train = total_train // num_workers
+            
+            # Xử lý Test
+            total_test = len(test_targets)
+            test_idx = np.arange(total_test)
+            np.random.shuffle(test_idx) # Trộn trước khi chia
+            split_test = total_test // num_workers
+            
+            for i in range(num_workers):
+                train_indices_map[i] = train_idx[i * split_train : (i + 1) * split_train].tolist()
+                test_indices_map[i] = test_idx[i * split_test : (i + 1) * split_test].tolist()
+        else:
+            # --- Chia Non-IID (Dirichlet) ---
+            # Gọi hàm static method bên dưới
+            # indices_map = self.partition_dirichlet(targets, num_workers, float(alpha))
+            # --- Chia Non-IID (Dirichlet) ĐỒNG BỘ ---
+            print(f"   -> Partitioning Mode: Non-IID (Dirichlet, Alpha={alpha})")
+            # Gọi hàm dirichlet_split_train_test mà chúng ta vừa định nghĩa ở phiên trước
+            train_indices_map, test_indices_map = self.dirichlet_split_train_test(
+                train_labels=train_targets, 
+                test_labels=test_targets, 
+                num_clients=num_workers, 
+                alpha=float(alpha), 
+                num_classes=num_classes
+            )
+
+        # BƯỚC C: Áp dụng Index cho từng Worker
+        # Worker sẽ tự tạo DataLoader dựa trên list index này
+        # for w in workers:
+        #     if w.id in indices_map:
+        #         w.apply_new_indices(indices_map[w.id], dataset_name)
+        for w in workers:
+            if w.id in train_indices_map and w.id in test_indices_map:
+                w.apply_new_indices(
+                    train_indices=train_indices_map[w.id], 
+                    test_indices=test_indices_map[w.id], 
+                    dataset_name=dataset_name
+                )
+                
+        print("[Scenario 4] Data setup completed.")
     
     def _get_raw_targets(self, dataset_name):
         """Helper để tải targets nhanh mà không cần transform ảnh"""
@@ -99,6 +164,29 @@ class ScenarioExperiment4(BaseScenario):
             print(f"Error loading raw targets for {dataset_name}: {e}")
             return []
         return []
+    
+    def _get_raw_train_test_targets(self, dataset_name):
+        if dataset_name == 'cifar10':
+            # Chỉ tải dataset để mượn mảng targets (nhãn), không cần transform
+            train_dataset = datasets.CIFAR10(root='./data', train=True, download=True)
+            test_dataset = datasets.CIFAR10(root='./data', train=False, download=True)
+            return train_dataset.targets, test_dataset.targets
+            
+        elif dataset_name == 'mnist':
+            train_dataset = datasets.MNIST(root='./data', train=True, download=True)
+            test_dataset = datasets.MNIST(root='./data', train=False, download=True)
+            return train_dataset.targets, test_dataset.targets
+        elif dataset_name == 'health':
+            # Bạn cần import hàm get_raw_dataset từ file dataset loader của bạn vào đây
+            # Ví dụ: from app.utils.data_loader import get_raw_dataset
+            train_dataset = get_raw_dataset('health', train=True)
+            test_dataset = get_raw_dataset('health', train=False)
+            
+            # Trả về 2 mảng nhãn nhờ thuộc tính .targets ta đã bơm vào lúc nãy
+            return train_dataset.targets, test_dataset.targets
+            
+        else:
+            raise ValueError(f"Dataset {dataset_name} chưa được hỗ trợ lấy targets kép.")
     
     def setup_network(self):
         """
@@ -148,7 +236,7 @@ class ScenarioExperiment4(BaseScenario):
     def _setup_backdoor(self,workers, mal_indices, is_dba):
         target_class = self.config.get('target_class', self.config.get('target_label', 0))
         poison_rate = self.config.get('poison_rate', 0.2)
-        scaling_factor = self.config.get('scaling_factor', 10.0) # Model Replacement scale
+        scaling_factor = self.config.get('scaling_factor', 5.0) # Model Replacement scale
 
         attack_config = {
             "target_class": target_class,

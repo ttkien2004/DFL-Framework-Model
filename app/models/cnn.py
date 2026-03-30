@@ -27,7 +27,11 @@ def get_model(model_name, num_classes=10):
     elif model_name == 'vgg9':
         return VGG9(num_classes=num_classes)
     elif model_name == 'simple_cnn':
-        return SimpleCNN()
+        return SimpleCNN(num_classes=num_classes)
+    elif model_name == 'resnet20':
+        return ResNet20(num_classes=num_classes)
+    elif model_name == 'health_mlp':
+        return HealthMLP(num_classes=num_classes)
         
     else:
         raise ValueError(f"Unknown model name: {model_name}")
@@ -111,4 +115,143 @@ class VGG9(nn.Module):
         x = self.features(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
+        return x
+
+# ==========================================
+# 3. RESNET-20 (Custom for Federated Learning)
+# ==========================================
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(8, planes)  # GroupNorm thay cho BatchNorm
+        
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn2 = nn.GroupNorm(8, planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.GroupNorm(8, self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.gn1(self.conv1(x)))
+        out = self.gn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+class ResNet20(nn.Module):
+    def __init__(self, num_classes=10):
+        super(ResNet20, self).__init__()
+        self.in_planes = 16
+
+        # Lớp Convolution đầu tiên
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(8, 16)
+        
+        # 3 cụm Residual Layers (Mỗi cụm 3 block)
+        self.layer1 = self._make_layer(BasicBlock, 16, 3, stride=1)
+        self.layer2 = self._make_layer(BasicBlock, 32, 3, stride=2)
+        self.layer3 = self._make_layer(BasicBlock, 64, 3, stride=2)
+        
+        # Lớp Linear cuối cùng
+        self.linear = nn.Linear(64 * BasicBlock.expansion, num_classes)
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for s in strides:
+            layers.append(block(self.in_planes, planes, s))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.gn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        
+        # Dùng AdaptiveAvgPool2d để tự động lấy trung bình bất chấp kích thước ảnh đầu vào (32x32 hoặc 64x64)
+        out = F.adaptive_avg_pool2d(out, (1, 1))
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
+
+class HarMLP(nn.Module):
+    def __init__(self, input_dim=561, num_classes=6): 
+        # UCI HAR có 561 đặc trưng 1D và 6 nhãn hành vi (Walking, Sitting, Laying,...)
+        super(HarMLP, self).__init__()
+        
+        # Lớp ẩn 1: Tăng cường trích xuất đặc trưng
+        self.fc1 = nn.Linear(input_dim, 256)
+        self.ln1 = nn.LayerNorm(256) # Dùng LayerNorm thân thiện với Federated Learning
+        
+        # Lớp ẩn 2
+        self.fc2 = nn.Linear(256, 128)
+        self.ln2 = nn.LayerNorm(128)
+        
+        # Lớp ẩn 3
+        self.fc3 = nn.Linear(128, 64)
+        self.ln3 = nn.LayerNorm(64)
+        
+        # Lớp phân loại đầu ra
+        self.fc_out = nn.Linear(64, num_classes)
+        
+        # Dropout chống học vẹt (Overfitting) do dữ liệu IoT thường nhiễu
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        # Đảm bảo input x là tensor 2D: (batch_size, 561)
+        x = x.view(x.size(0), -1) 
+        
+        x = F.relu(self.ln1(self.fc1(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln2(self.fc2(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln3(self.fc3(x)))
+        x = self.dropout(x)
+        
+        x = self.fc_out(x)
+        return x
+    
+class HealthMLP(nn.Module):
+    def __init__(self, input_dim=36, num_classes=2): 
+        super(HealthMLP, self).__init__()
+        
+        # Lớp ẩn 1
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.ln1 = nn.LayerNorm(128)
+        
+        # Lớp ẩn 2
+        self.fc2 = nn.Linear(128, 64)
+        self.ln2 = nn.LayerNorm(64)
+        
+        # Lớp ẩn 3
+        self.fc3 = nn.Linear(64, 32)
+        self.ln3 = nn.LayerNorm(32)
+        
+        # Phân loại đầu ra (Anomaly hay Normal)
+        self.fc_out = nn.Linear(32, num_classes)
+        
+        # Dropout để chống Overfitting trên thiết bị IoT
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = F.relu(self.ln1(self.fc1(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln2(self.fc2(x)))
+        x = self.dropout(x)
+        
+        x = F.relu(self.ln3(self.fc3(x)))
+        x = self.dropout(x)
+        
+        x = self.fc_out(x)
         return x
