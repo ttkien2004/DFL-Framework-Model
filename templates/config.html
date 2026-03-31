@@ -354,7 +354,15 @@
 												</select>
 											</div>
 										</div>
-
+										<div class="mb-4">
+												<label for="num_classes" class="form-label fw-bold">
+													<i class="bi bi-tags-fill text-info me-2"></i>Số lượng Nhãn (Num Classes)
+												</label>
+												<input type="number" class="form-control" id="num_classes" value="10" min="2" max="1000">
+												<div class="form-text">
+													Cấu hình số lượng nhãn của Dataset (Ví dụ: MNIST/CIFAR-10 = 10, Health Dataset = 2, Kather = 8).
+												</div>
+											</div>
 										<div class="row mb-3">
 											<div class="col-md-6">
 												<label class="form-label text-danger fw-bold"
@@ -378,6 +386,8 @@
 													Ví dụ: 0.3 nghĩa là 30% workers là kẻ tấn công.
 												</div>
 											</div>
+											
+		
 											<div class="col-md-6">
 												<label class="form-label fw-bold"
 													>Loại Tấn công (Attack Type)</label
@@ -1054,7 +1064,7 @@
 							batch_size: parseInt(formData.get("batch_size")),
 							learning_rate: parseFloat(formData.get("learning_rate")),
 							target_rounds: targetRounds, // Gửi số vòng lên server
-							num_classes: 2,
+							num_classes: parseInt(document.getElementById("num_classes").value),
 							reset: initialReset,
 						};
 

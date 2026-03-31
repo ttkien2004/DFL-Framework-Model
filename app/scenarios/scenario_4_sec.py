@@ -82,7 +82,7 @@ class ScenarioExperiment4(BaseScenario):
 
     def setup_data(self, workers, dataset_name):
         dataset_name = dataset_name.lower()
-        alpha = self.config.get('non_iid_alpha', 0.7) # Lấy alpha từ config
+        alpha = self.config.get('non_iid_alpha', 0.5) # Lấy alpha từ config
         num_workers = len(workers)
         num_classes = self.config.get('num_classes', 10)
         
