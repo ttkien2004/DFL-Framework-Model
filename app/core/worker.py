@@ -1083,16 +1083,49 @@ class WorkerNode:
         
         return {}
     # -----------------------------------------------------------------------------------
-    def _add_trigger(self, images):
+    # def _add_trigger(self, images):
+    #     """
+    #     Hàm helper để gắn trigger lên ảnh test.
+    #     Logic này PHẢI KHỚP với logic tấn công (ví dụ: pattern 3x3 pixel góc phải).
+    #     """
+    #     # Giả sử trigger là một ô vuông trắng 3x3 ở góc dưới bên phải
+    #     # images shape: [Batch, Channel, Height, Width]
+    #     from app.utils.trigger import add_pixel_pattern
+    #     patch_images = images.clone()
+    #     return add_pixel_pattern(patch_images,self.device)
+    def _add_trigger(self, data):
         """
-        Hàm helper để gắn trigger lên ảnh test.
-        Logic này PHẢI KHỚP với logic tấn công (ví dụ: pattern 3x3 pixel góc phải).
+        Hàm helper để gắn trigger lên dữ liệu test.
+        Hỗ trợ cả Dữ liệu Ảnh (gọi hàm add_pixel_pattern) và Dữ liệu Bảng y tế.
         """
-        # Giả sử trigger là một ô vuông trắng 3x3 ở góc dưới bên phải
-        # images shape: [Batch, Channel, Height, Width]
-        from app.utils.trigger import add_pixel_pattern
-        patch_images = images.clone()
-        return add_pixel_pattern(patch_images,self.device)
+        patch_data = data.clone()
+        dims = len(patch_data.shape)
+        
+        # =======================================================
+        # TRƯỜNG HỢP 1: LÔ DỮ LIỆU BẢNG (Health Dataset) - [Batch, 36]
+        # =======================================================
+        if dims == 2:
+            # Cấy GLOBAL Trigger y hệt như logic ở TriggerGenerator
+            trigger_value = 10.0
+            
+            patch_data[:, 0] = trigger_value
+            patch_data[:, 1] = -trigger_value
+            patch_data[:, 2] = trigger_value
+            patch_data[:, 3] = -trigger_value
+            
+            return patch_data
+
+        # =======================================================
+        # TRƯỜNG HỢP 2: LÔ DỮ LIỆU ẢNH (MNIST/CIFAR-10) - [Batch, C, H, W]
+        # =======================================================
+        elif dims == 4:
+            # Tái sử dụng lại hàm add_pixel_pattern cũ của bạn
+            from app.utils.trigger import add_pixel_pattern
+            return add_pixel_pattern(patch_data, self.device)
+            
+        # Các trường hợp khác (nếu có)
+        else:
+            return patch_data
     
     def set_neighbors(self, neighbor_indices):
         """
