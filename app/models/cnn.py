@@ -37,18 +37,35 @@ def get_model(model_name, num_classes=10):
         raise ValueError(f"Unknown model name: {model_name}")
 
 class SimpleCNN(nn.Module):
+    # def __init__(self, num_classes=10):
+    #     super(SimpleCNN, self).__init__()
+    #     self.conv1 = nn.Conv2d(1, 32, 3)  # Changed from 3 to 1 channel
+    #     self.pool = nn.MaxPool2d(2, 2)
+    #     self.conv2 = nn.Conv2d(32, 64, 3)
+    #     self.fc1 = nn.Linear(64 * 5 * 5, 64)  # Fixed for MNIST
+    #     self.fc2 = nn.Linear(64, num_classes) # Dynamic num_classes
+
+    # def forward(self, x):
+    #     x = self.pool(F.relu(self.conv1(x)))
+    #     x = self.pool(F.relu(self.conv2(x)))
+    #     x = torch.flatten(x, 1)
+    #     x = F.relu(self.fc1(x))
+    #     x = self.fc2(x)
+    #     return x
     def __init__(self, num_classes=10):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, 3)
+        # Chuyển từ 3 kênh (RGB) sang 1 kênh (Grayscale) cho MNIST
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3) 
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(32, 64, 3)
-        self.fc1 = nn.Linear(64 * 6 * 6, 64)
-        self.fc2 = nn.Linear(64, num_classes) # Dynamic num_classes
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
+        # 64 channels * 5 * 5 (kích thước sau 2 lần pool) = 1600
+        self.fc1 = nn.Linear(64 * 5 * 5, 64) 
+        self.fc2 = nn.Linear(64, num_classes)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)
+        x = x.view(-1, 64 * 5 * 5)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
