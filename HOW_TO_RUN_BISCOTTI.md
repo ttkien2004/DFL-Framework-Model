@@ -5,19 +5,21 @@
 A. Thực nghiệm trên tập dữ liệu MNIST MNIST - Gaussian Noise (50 nodes):
 
 ```Bash
-python run_experiment.py --dataset mnist --attack-type GAUSS --num-nodes 50 --malicious-ratio 0.3 --max-iterations 100
+python run_biscotti.py --dataset mnist --attack-type GAUSS --num-nodes 50 --malicious-ratio 0.3 --max-iterations 100
 ```
 
 MNIST - Backdoor Attack (50 nodes, Target: 5):
 
 ```Bash
-python run_experiment.py --dataset mnist --attack-type BACKDOOR --num-nodes 50 --malicious-ratio 0.3 --max-iterations 100 --tgt-class 5
+python run_biscotti.py --dataset mnist --attack-type BACKDOOR --num-nodes 50 --malicious-ratio 0.3 --max-iterations 100 --tgt-class 5
 ```
 
 MNIST - Label Flipping (30 nodes, 3 -> 5):
 
 ```Bash
-python run_experiment.py --dataset mnist --attack-type LABEL_FLIPPING --num-nodes 30 --malicious-ratio 0.3 --max-iterations 100 --src-class 3 --tgt-class 5
+python run_biscotti.py --dataset mnist --attack-type LABEL_FLIPPING --num-nodes 30 --malicious-ratio 0.3 --max-iterations 100 --src-class 3 --tgt-class 5
+
+python run_biscotti.py --dataset mnist --attack-type GRADIENT_INVERSION --num-nodes 10 --malicious-ratio 0.3 --max-iterations 20 --gia-iterations 2000 --gia-lr 0.1
 ```
 
 Hoặc nếu chạy bằng bash:

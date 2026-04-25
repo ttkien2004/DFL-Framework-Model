@@ -30,6 +30,13 @@ class GlobalEvaluator:
             test_ds.targets = np.array([full_dataset.y[i].item() for i in test_ds.indices])
             self.test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
+    def _apply_backdoor_trigger(self, data):
+        if self.dataset_name == 'mnist' and data.dim() == 4:
+            data[:, :, 0:3, 0:3] = 2.5
+        elif self.dataset_name == 'health' and data.dim() == 2:
+            data[:, 0:3] = 2.5
+        return data
+
     def evaluate(self, global_weights, attack_type="NONE", src_class=3, tgt_class=5):
         clean_weights = {}
         for k, v in global_weights.items():
@@ -65,16 +72,22 @@ class GlobalEvaluator:
                 clean_correct += preds.eq(target).sum().item()
                 total += target.size(0)
 
-                # Tính ASR cho Label Flipping (hoặc Backdoor nếu có trigger)
+                # Tính ASR cho Label Flipping / Backdoor
                 if attack_type == "LABEL_FLIPPING":
                     src_mask = target == src_class
                     if src_mask.sum() > 0:
                         asr_total += src_mask.sum().item()
                         asr_success += (preds[src_mask] == tgt_class).sum().item()
                 elif attack_type == "BACKDOOR":
-                    # Logic mô phỏng: Đếm tỷ lệ đoán ra target_class (rất cơ bản, nếu muốn chính xác cần test_loader có chứa trigger ảnh)
-                    # Tạm thời để logic chuẩn bị
-                    pass
+                    # Tạo bộ dữ liệu triggered từ các mẫu không thuộc target_class
+                    bd_mask = target != tgt_class
+                    if bd_mask.sum() > 0:
+                        triggered_data = self._apply_backdoor_trigger(data[bd_mask].clone())
+                        triggered_output = self.model(triggered_data)
+                        triggered_preds = triggered_output.argmax(dim=1)
+
+                        asr_total += bd_mask.sum().item()
+                        asr_success += (triggered_preds == tgt_class).sum().item()
 
         # Tính toán Metrics
         avg_acc = clean_correct / total
@@ -93,10 +106,13 @@ class GlobalEvaluator:
         precision_arr = precision_score(y_true, y_pred, average=None, labels=[src_class, tgt_class], zero_division=0)
         recall_arr = recall_score(y_true, y_pred, average=None, labels=[src_class, tgt_class], zero_division=0)
         
-        src_recall = recall_arr[0]
-        tgt_precision = precision_arr[1]
+        src_recall = recall_arr[0] if len(recall_arr) > 0 else 0.0
+        tgt_precision = precision_arr[1] if len(precision_arr) > 1 else 0.0
         
-        asr = (asr_success / asr_total) if asr_total > 0 else 0.0
+        if attack_type == "GAUSS":
+            asr = 0.0
+        else:
+            asr = (asr_success / asr_total) if asr_total > 0 else 0.0
 
         return {
             "avg_acc": avg_acc,

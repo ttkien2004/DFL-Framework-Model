@@ -13,6 +13,8 @@ from app.utils.data_spliter import dirichlet_split_noniid
 from app.utils.data_loader import PersonalHealthDataset
 from torchvision import datasets, transforms
 from torch.utils.data import random_split
+import torch
+import numpy as np
 
 def run_simulation(args):
     print("="*60)
@@ -54,7 +56,7 @@ def run_simulation(args):
     # Khởi tạo các Node, truyền dataset_name vào
     nodes = []
     for i in range(args.num_nodes):
-        node = FederatedNode(model_name=model_name, num_classes=num_classes)
+        node = FederatedNode(model_name=model_name, num_classes=num_classes, dataset_name=args.dataset)
         node.set_local_dataset(client_datasets[i]) # Gán dữ liệu cục bộ
         nodes.append(node)
     
@@ -64,14 +66,15 @@ def run_simulation(args):
     stake_map = {i: 10 for i in range(args.num_nodes)} 
     
     # 3. Khởi tạo Evaluator với đúng dataset
-    base_model = get_model('simple_cnn', 10) 
+    base_model = get_model(model_name=model_name,num_classes=num_classes) 
     evaluator = GlobalEvaluator(base_model, dataset_name=args.dataset)
     
     # 4. Lưu trữ lịch sử (Ghi thêm thông tin cấu hình vào json)
     history = {
         "config": vars(args), # Lưu lại toàn bộ cấu hình chạy
         "rounds": [], "execution_time": [], "avg_acc": [], "avg_loss": [], 
-        "max_ter": [], "asr": [], "f1": [], "auc": [], "src_recall": [], "tgt_precision": []
+        "max_ter": [], "asr": [], "f1": [], "auc": [], "src_recall": [], "tgt_precision": [],
+        "gia_recon_mse": [], "gia_recon_psnr": []
     }
 
     # --- VÒNG LẶP HUẤN LUYỆN ---
@@ -92,7 +95,9 @@ def run_simulation(args):
                 is_malicious=is_malicious, 
                 attack_type=args.attack_type,
                 src_class=args.src_class, 
-                tgt_class=args.tgt_class
+                tgt_class=args.tgt_class,
+                gia_iterations=args.gia_iterations,
+                gia_lr=args.gia_lr
             )
             updates.append(delta)
             
@@ -124,6 +129,19 @@ def run_simulation(args):
         history["src_recall"].append(metrics["src_recall"])
         history["tgt_precision"].append(metrics["tgt_precision"])
 
+        if args.attack_type in ["GIA", "GRADIENT_INVERSION"]:
+            gi_metrics = [node.gia_metrics for node in nodes if getattr(node, 'gia_metrics', None) is not None]
+            if gi_metrics:
+                avg_mse = sum(m['recon_mse'] for m in gi_metrics) / len(gi_metrics)
+                avg_psnr = sum(m['recon_psnr'] for m in gi_metrics) / len(gi_metrics)
+            else:
+                avg_mse, avg_psnr = 0.0, 0.0
+            history["gia_recon_mse"].append(avg_mse)
+            history["gia_recon_psnr"].append(avg_psnr)
+        else:
+            history["gia_recon_mse"].append(0.0)
+            history["gia_recon_psnr"].append(0.0)
+
     # --- LƯU KẾT QUẢ KHI CHẠY XONG ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs("histories", exist_ok=True)
@@ -136,12 +154,14 @@ if __name__ == "__main__":
     # KHAI BÁO CÁC THAM SỐ DÒNG LỆNH
     parser = argparse.ArgumentParser(description="Biscotti Federated Learning Simulation")
     parser.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "health"], help="Tập dữ liệu: mnist hoặc health")
-    parser.add_argument("--attack-type", type=str, default="NONE", choices=["NONE", "GAUSS", "BACKDOOR", "LABEL_FLIPPING"], help="Loại tấn công")
+    parser.add_argument("--attack-type", type=str, default="NONE", choices=["NONE", "GAUSS", "BACKDOOR", "LABEL_FLIPPING", "GIA", "GRADIENT_INVERSION"], help="Loại tấn công")
     parser.add_argument("--num-nodes", type=int, default=30, help="Tổng số nút tham gia")
     parser.add_argument("--malicious-ratio", type=float, default=0.3, help="Tỷ lệ nút độc hại (Ví dụ 0.3 = 30%)")
     parser.add_argument("--max-iterations", type=int, default=100, help="Số vòng giao tiếp tối đa")
     parser.add_argument("--src-class", type=int, default=3, help="Nhãn gốc (dùng cho Label Flipping)")
     parser.add_argument("--tgt-class", type=int, default=5, help="Nhãn mục tiêu (dùng cho Backdoor/Label Flipping)")
+    parser.add_argument("--gia-iterations", type=int, default=2000, help="Số vòng lặp Gradient Inversion")
+    parser.add_argument("--gia-lr", type=float, default=0.1, help="Learning rate cho Gradient Inversion")
     
     args = parser.parse_args()
     run_simulation(args)
