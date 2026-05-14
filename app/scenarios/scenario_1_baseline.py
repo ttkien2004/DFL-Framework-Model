@@ -5,6 +5,7 @@ from torch.utils.data import Subset, DataLoader
 # Import dataset loaders gốc (raw) để chia
 from torchvision import datasets, transforms
 from app.scenarios.base_scenario import BaseScenario
+from app.utils.data_loader import get_raw_dataset
 
 class ScenarioExperiment1(BaseScenario):
     """
@@ -121,7 +122,14 @@ class ScenarioExperiment1(BaseScenario):
             train_dataset = datasets.MNIST(root='./data', train=True, download=True)
             test_dataset = datasets.MNIST(root='./data', train=False, download=True)
             return train_dataset.targets, test_dataset.targets
+        elif dataset_name == 'health':
+            # Bạn cần import hàm get_raw_dataset từ file dataset loader của bạn vào đây
+            # Ví dụ: from app.utils.data_loader import get_raw_dataset
+            train_dataset = get_raw_dataset('health', train=True)
+            test_dataset = get_raw_dataset('health', train=False)
             
+            # Trả về 2 mảng nhãn nhờ thuộc tính .targets ta đã bơm vào lúc nãy
+            return train_dataset.targets, test_dataset.targets
         else:
             raise ValueError(f"Dataset {dataset_name} chưa được hỗ trợ lấy targets kép.")
     

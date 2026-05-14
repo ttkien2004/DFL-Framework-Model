@@ -152,6 +152,7 @@
 													</option>
 													<option value="fashion_mnist">Fashion MNIST</option>
 													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
 												</select>
 											</div>
 											<div class="col-md-6">
@@ -168,6 +169,7 @@
 													</option>
 													<option value="vgg9">VGG9 (Cho CIFAR)</option>
 													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
 												</select>
 											</div>
 										</div>
@@ -355,14 +357,23 @@
 											</div>
 										</div>
 										<div class="mb-4">
-												<label for="num_classes" class="form-label fw-bold">
-													<i class="bi bi-tags-fill text-info me-2"></i>Số lượng Nhãn (Num Classes)
-												</label>
-												<input type="number" class="form-control" id="num_classes" value="10" min="2" max="1000">
-												<div class="form-text">
-													Cấu hình số lượng nhãn của Dataset (Ví dụ: MNIST/CIFAR-10 = 10, Health Dataset = 2, Kather = 8).
-												</div>
+											<label for="num_classes" class="form-label fw-bold">
+												<i class="bi bi-tags-fill text-info me-2"></i>Số lượng
+												Nhãn (Num Classes)
+											</label>
+											<input
+												type="number"
+												class="form-control"
+												id="num_classes"
+												value="10"
+												min="2"
+												max="1000"
+											/>
+											<div class="form-text">
+												Cấu hình số lượng nhãn của Dataset (Ví dụ:
+												MNIST/CIFAR-10 = 10, Health Dataset = 2, Kather = 8).
 											</div>
+										</div>
 										<div class="row mb-3">
 											<div class="col-md-6">
 												<label class="form-label text-danger fw-bold"
@@ -386,8 +397,7 @@
 													Ví dụ: 0.3 nghĩa là 30% workers là kẻ tấn công.
 												</div>
 											</div>
-											
-		
+
 											<div class="col-md-6">
 												<label class="form-label fw-bold"
 													>Loại Tấn công (Attack Type)</label
@@ -783,6 +793,7 @@
 						learning_rate: parseFloat(formData.get("learning_rate")),
 						target_rounds: targetRounds,
 						reset: initialReset,
+						num_classes: 2,
 					};
 
 					if (basePayload.system_mode === "BASELINE") {
@@ -1064,7 +1075,9 @@
 							batch_size: parseInt(formData.get("batch_size")),
 							learning_rate: parseFloat(formData.get("learning_rate")),
 							target_rounds: targetRounds, // Gửi số vòng lên server
-							num_classes: parseInt(document.getElementById("num_classes").value),
+							num_classes: parseInt(
+								document.getElementById("num_classes").value,
+							),
 							reset: initialReset,
 						};
 
