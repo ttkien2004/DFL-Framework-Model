@@ -333,6 +333,127 @@ def run_biscotti():
         "history_file": history_filename,
         "metrics": history
     })
+
+
+# ================ ABLATION STUDY ENDPOINTS ================
+@app.route('/run_ablation_study', methods=['POST'])
+def run_ablation_study():
+    """
+    Endpoint để chạy các scenario ablation (loại bỏ từng tính năng)
+    
+    Expected JSON:
+    {
+        "bypass_mode": <int>,  # 0=Full, 1=NoClustering, 2=NoPrivacy, 4=NoByzantine, 8=NoBlockchain, 15=TraditionalDFL
+        "total_rounds": <int>,
+        "num_workers": <int>,
+        "dataset": <str>,
+        "model": <str>,
+        ...other engine config...
+    }
+    """
+    from app.core.bypass_ablation import BypassConfig
+    
+    req_data = request.json
+    bypass_mode = int(req_data.get("bypass_mode", 0))
+    total_rounds = int(req_data.get("total_rounds", 10))
+    scenario_name = BypassConfig.get_name(bypass_mode)
+    
+    def ablation_loop():
+        global training_status, history
+        
+        with app.app_context():
+            try:
+                training_status["is_running"] = True
+                training_status["total_rounds"] = total_rounds
+                training_status["message"] = f"Running {scenario_name} ablation study..."
+                
+                print(f"\n{'='*60}")
+                print(f"[Ablation Study] {scenario_name} (bypass_mode={bypass_mode})")
+                print(f"{'='*60}")
+                
+                # Khởi tạo engine với bypass mode
+                engine.initialize_system(req_data)
+                
+                # Reset history
+                history = defaultdict(list)
+                
+                # Vòng lặp training
+                for r in range(total_rounds):
+                    training_status["current_round"] = r + 1
+                    training_status["message"] = f"{scenario_name}: Round {r+1}/{total_rounds}..."
+                    
+                    if r != 0:
+                        req_data['reset'] = False
+                    
+                    # Chạy round
+                    result = engine.run_round(r, req_data)
+                    
+                    # Cập nhật history
+                    update_history_dynamic(history, r, result, req_data.get('system_mode', 'PROPOSED'))
+                    
+                    print(f" -> Round {r+1} ({scenario_name}) finished. Acc: {result.get('avg_acc', 0):.4f}")
+                
+                # Lưu history
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                os.makedirs("histories", exist_ok=True)
+                history_filename = f"histories/ablation_{timestamp}_{scenario_name}.json"
+                
+                with open(history_filename, "w") as f:
+                    json.dump({
+                        "ablation_scenario": scenario_name,
+                        "bypass_mode": bypass_mode,
+                        "total_rounds": total_rounds,
+                        "metrics": dict(history),
+                        "bypass_report": engine.bypass_executor.get_report() if engine.bypass_executor else {}
+                    }, f, indent=4)
+                
+                training_status["message"] = f"{scenario_name} completed"
+                training_status["output_file"] = history_filename
+                
+                print(f"[Ablation Study] Results saved to {history_filename}")
+                
+            except Exception as e:
+                print(f"[Ablation Error] {str(e)}")
+                import traceback
+                traceback.print_exc()
+                training_status["message"] = f"Error: {str(e)}"
+            finally:
+                training_status["is_running"] = False
+    
+    # Chạy trong thread ngầm
+    thread = threading.Thread(target=ablation_loop)
+    thread.start()
+    
+    return jsonify({
+        "status": "started",
+        "message": f"Ablation study '{scenario_name}' started in background",
+        "bypass_mode": bypass_mode,
+        "scenario": scenario_name
+    })
+
+
+@app.route('/list_bypass_modes', methods=['GET'])
+def list_bypass_modes():
+    """
+    Liệt kê tất cả các bypass modes có sẵn
+    """
+    from app.core.bypass_ablation import BypassConfig
+    
+    modes = {
+        0: "Full_Features - Chạy đầy đủ tính năng (CoCo + Privacy + Byzantine + Blockchain)",
+        1: "No_Clustering - Tất cả nodes vào 1 cụm (No Dynamic Clustering)",
+        2: "No_Privacy - Không LDP/SSS (gửi gradient sạch)",
+        4: "No_Byzantine - Dùng FedAvg thay vì BALANCE",
+        8: "No_Blockchain - Lưu model vào RAM thay vì blockchain",
+        15: "Traditional_DFL - Tất cả bypass (trở thành DFL truyền thống)"
+    }
+    
+    return jsonify({
+        "available_modes": modes,
+        "description": "Sử dụng bypass_mode trong request /run_ablation_study để chọn scenario"
+    })
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=5000)

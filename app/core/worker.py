@@ -1268,8 +1268,17 @@ class WorkerNode:
         # 2. Bắt đầu đánh giá từng model trong k-models
         with torch.no_grad():
             for cid, model_state in k_models_dict.items():
-                # Load trọng số của model cụm (cid) vào
-                self.model.load_state_dict(model_state)
+                # Validar model_state
+                if not isinstance(model_state, dict) or len(model_state) == 0:
+                    # Skip invalid models
+                    continue
+                
+                try:
+                    # Load trọng số của model cụm (cid) vào
+                    self.model.load_state_dict(model_state)
+                except Exception as e:
+                    # Skip se modelo não carregar
+                    continue
                 
                 client_loss = 0.0
                 correct = 0
@@ -1300,6 +1309,11 @@ class WorkerNode:
         # 4. TRẢ LẠI HIỆN TRẠNG: Khôi phục trọng số gốc cho Worker
         self.model.load_state_dict(original_state)
         self.model.to('cpu')
+
+        # Se nenhum modelo foi carregado com sucesso, retorna fallback
+        if best_loss == float('inf'):
+            best_loss = 10000.0
+            best_acc = 0.0
 
         return {
             "accuracy": best_acc,

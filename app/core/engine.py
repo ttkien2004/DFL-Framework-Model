@@ -13,6 +13,7 @@ from app.utils.helpers import compute_model_norm, sanitize_for_json, get_model_s
 from app.blockchain.consensus import Blockchain
 from app.core.ipfs import StorageService
 from app.core.coco_helpers import CoCo
+from app.core.bypass_ablation import BypassExecutor, BypassConfig, BypassClustering, BypassByzantine, BypassBlockchain, BypassPrivacy
 import numpy as np
 import copy
 from collections import defaultdict
@@ -27,6 +28,7 @@ class SimulationEngine:
         self.workers = []
         self.blockchain = None
         self.system_mode = 'PROPOSED'
+        self.bypass_executor = None  # Sẽ được khởi tạo trong initialize_system
         
         # Lưu trạng thái nội bộ
         self.current_dataset = Config.DATASET_NAME
@@ -94,8 +96,13 @@ class SimulationEngine:
         self.test_loader = get_global_test_loader(dataset_name, batch_size)
         self.engine_config = req_data
         
+        # Khởi tạo Bypass Executor (nếu có bypass_mode trong request)
+        bypass_mode = req_data.get('bypass_mode', 0)  # 0 = No bypass (full features)
+        self.bypass_executor = BypassExecutor(bypass_mode)
+        
         self.workers = []
         print(f"Initializing System in [{self.system_mode}] mode with {num_workers} workers.")
+        print(f"[Bypass Mode] {self.bypass_executor.get_report()}")
 
         for i in range(num_workers):
             if self.system_mode == 'BASELINE':
@@ -118,6 +125,7 @@ class SimulationEngine:
             # Khởi tạo điểm ban đầu và lỗi cho tất cả nodes
             self.blockchain.initialize_faults(self.workers)
             self.blockchain.initialize_reputation(self.workers)
+            self.blockchain.initialize_rewards(self.workers)
             # Khởi tạo k-models
             self._initialize_global_k_models()
 
@@ -364,7 +372,8 @@ class SimulationEngine:
                 if cid in current_hashes_on_chain:                    
                     old_hash = current_hashes_on_chain[cid]
                     old_model_state = self.storage.download_model(old_hash)
-                    if old_model_state:
+                    # Kiểm tra model_state là dict có dữ liệu
+                    if isinstance(old_model_state, dict) and len(old_model_state) > 0:
                         current_round_cluster_models[cid] = old_model_state
         consensus_dist = self._calculate_consensus_distance(self.workers, current_round_cluster_models)
 
@@ -432,8 +441,14 @@ class SimulationEngine:
     def _phase_clustering(self, workers_pools, round_id):
         """
         Giai đoạn 1: Phân cụm động dựa trên Loss (Dynamic Clustering)
+        Hỗ trợ Bypass Clustering: Gán tất cả vào 1 cụm duy nhất
         """
         print(f"[Phase 1] Clustering (Round {round_id})...")
+        
+        # Kiểm tra Bypass Clustering
+        if self.bypass_executor and not self.bypass_executor.should_cluster():
+            print("[Bypass Clustering] All workers assigned to single cluster")
+            return BypassClustering.cluster_all_nodes(workers_pools, cluster_id=0)
         
         num_clusters = getattr(Config, 'NUM_CLUSTERS', 5)
         cluster_models = {} # Dictionary chứa {cluster_id: state_dict}        
@@ -498,6 +513,10 @@ class SimulationEngine:
         return clusters
 
     def _phase_training_ldp(self, clusters):
+        """
+        Giai đoạn 2: Huấn luyện & LDP (Local Differential Privacy)
+        Hỗ trợ Bypass Privacy: Bỏ qua thêm nhiễu LDP/SSS
+        """
         print("[Phase 2] Training...")
         worker_updates_cache = {}
         
@@ -517,8 +536,16 @@ class SimulationEngine:
             if w_loss is not None:
                 train_losses.append(w_loss)
             
-            # 2. Local Differential Privacy (Nếu có)
-            # w_dp = w.apply_ldp(w_new)
+            # 2. Local Differential Privacy (LDP)
+            # Kiểm tra Bypass Privacy
+            if self.bypass_executor and not self.bypass_executor.should_apply_privacy():
+                print(f"[Bypass Privacy] Worker {w.id} sending clean gradient (no LDP noise)")
+                # Bỏ qua thêm nhiễu, gửi gradient gốc
+                w_final = BypassPrivacy.skip_ldp_noise(w_final)
+            else:
+                # Normal LDP processing (nếu worker có hàm apply_ldp)
+                if hasattr(w, 'apply_ldp'):
+                    w_final = w.apply_ldp(w_final)
             
             # Lưu vào cache để lát nữa Head thu thập
             worker_updates_cache[w.id] = w_final
@@ -576,6 +603,10 @@ class SimulationEngine:
         return instruction_maps, all_topologies
 
     def _phase_aggregation(self, clusters, instruction_maps, worker_updates_cache, round_id):
+        """
+        Giai đoạn 4: Gossip & Aggregation
+        Hỗ trợ Bypass Byzantine: Dùng FedAvg thay vì BALANCE
+        """
         print("[Phase 4] Aggregation...")
         worker_lookup = {w.id: w  
                          for cluster in clusters.values()
@@ -589,7 +620,7 @@ class SimulationEngine:
 
         if not cluster_heads:
             print("Warning: No Cluster Heads found! Check _phase_clustering.")
-            return [], []
+            return [], [], 0.0
         # Gossip Logic (DFCA)
         for ch_id, ch_instr in instruction_maps.items():
             for w_id, instr in ch_instr.items():
@@ -614,13 +645,49 @@ class SimulationEngine:
         results = []
         accuracies = []
         for ch in cluster_heads.values():
-            ch.set_committee_info(committee_config={
-                't': self.t_threshold,
-                'n': len(self.current_committee),
-                'committee': self.current_committee
-            })
-            aggregate_res = ch.aggregate(round_k=round_id)
+            # Kiểm tra Bypass Byzantine
+            if self.bypass_executor and not self.bypass_executor.should_use_byzantine():
+                print(f"[Bypass Byzantine] Cluster {ch.cluster_id} using FedAvg aggregation")
+                # Collect local updates từ pending_models
+                # IMPORTANTE: pending_models contém tuplas (worker_id, model_state_dict)
+                # Precisa extrair apenas o model_state_dict (segundo elemento)
+                local_updates = []
+                for item in getattr(ch, 'pending_models', []):
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        # Extract model_state_dict from tuple (worker_id, model_state_dict)
+                        model_state = item[1]
+                    elif isinstance(item, dict):
+                        # If it's already a dict, use it directly
+                        model_state = item
+                    else:
+                        # Skip invalid items
+                        continue
+                    
+                    if isinstance(model_state, dict):
+                        local_updates.append(model_state.copy())
+                
+                if not local_updates and hasattr(ch, 'global_model'):
+                    # Nếu chưa có pending_models, dùng model hiện tại
+                    local_updates = [ch.global_model.state_dict()]
+                
+                # Dùng FedAvg aggregation
+                aggregated_model = BypassByzantine.fedavg_aggregation(local_updates)
+                aggregate_res = {
+                    "flat_weights": None,  # Bypass Byzantine doesn't use secret sharing
+                    "model_state_dict": aggregated_model,
+                    "model_hash": str(hash(str(aggregated_model)))
+                }
+            else:
+                # Normal aggregation (BALANCE or robust aggregation)
+                ch.set_committee_info(committee_config={
+                    't': self.t_threshold,
+                    'n': len(self.current_committee),
+                    'committee': self.current_committee
+                })
+                aggregate_res = ch.aggregate(round_k=round_id)
+            
             total_traffic += ch.calculate_traffic()
+
 
             # Giả lập validate accuracy
             # simulated_acc = min(95.0, 15.0 + round_id * 2.5 + random.uniform(-2, 3))
@@ -787,11 +854,45 @@ class SimulationEngine:
         """
         Giai đoạn 5: Đồng thuận Blockchain (Consensus)
         Bao gồm: Thu thập mảnh, View Change (nếu cần), Bầu cử và Ghi Block.
+        Hỗ trợ Bypass Blockchain: Lưu model vào memory storage
         """
         print("\n[Phase 5] Blockchain Consensus with View Change...")
         logs = []
         consensus_data = []
         
+        # Kiểm tra Bypass Blockchain
+        if self.bypass_executor and not self.bypass_executor.should_use_blockchain():
+            print("[Bypass Blockchain] Using in-memory storage instead of blockchain")
+            for res in results:
+                cluster_id = res.get('cluster_id')
+                model_state = res.get('model_state_dict')
+                
+                # Se model_state_dict não é dict válido, pula
+                if not isinstance(model_state, dict) or len(model_state) == 0:
+                    print(f"[Bypass Blockchain] Cluster {cluster_id} has invalid model_state, skipping")
+                    continue
+                
+                # Lưu vào memory storage
+                self.bypass_executor.memory_storage.store_model(
+                    cluster_id=cluster_id,
+                    model_state=model_state,
+                    metadata={"round": len(logs), "status": "ACCEPTED"}
+                )
+                
+                # Trả về kết quả bypass (không cần vote/consensus)
+                consensus_result = {
+                    "status": "ACCEPTED",
+                    "cluster_id": cluster_id,
+                    "model_state_dict": model_state,
+                    "storage_uri": f"memory://cluster_{cluster_id}",
+                    "data": {"accuracy": 0.0, "votes": {}}
+                }
+                consensus_data.append(consensus_result)
+                logs.append(f"Cluster {cluster_id}: Bypass storage completed")
+            
+            return consensus_data, logs
+        
+        # Normal blockchain consensus (không bypass)
         # Danh sách worker dự phòng để thay thế nếu cần View Change
         available_workers = self.workers 
 
@@ -1260,7 +1361,7 @@ class SimulationEngine:
 
         # Random chọn trong pool để chốt danh sách
         k = min(len(committee_pool), target_committee_size)
-        committee = random.sample(committee_pool, k)
+        committee = random.sample(committee_pool, k) + [proposer]
 
         # 7. Worker là phần còn lại
         # Gom Proposer và Committee thành set để loại trừ
@@ -1281,6 +1382,46 @@ class SimulationEngine:
         cluster_id = res['cluster_id']
         flat_weights = res.get('flat_weights')
         metadata = res.get('metadata')
+        model_state_dict = res.get('model_state_dict')
+
+        # Nếu flat_weights là None (bypass Byzantine), không cần secret sharing
+        if flat_weights is None:
+            print(f"[Bypass Byzantine] Cluster {cluster_id} skipping secret sharing (flat_weights=None)")
+            # Trả về kết quả trực tiếp mà không cần consensus
+            consensus_result = {
+                "status": "ACCEPTED",
+                "cluster_id": cluster_id,
+                "model_state_dict": model_state_dict,
+                "storage_uri": f"memory://cluster_{cluster_id}",
+                "data": {"accuracy": 0.0, "votes": {}}
+            }
+            return consensus_result
+
+        # Validate flat_weights: nếu dict, convert từ model_state_dict
+        if isinstance(flat_weights, dict):
+            print(f"[WARN] flat_weights invalid (type={type(flat_weights)}), attempting to create from model_state_dict...")
+            if isinstance(model_state_dict, dict) and len(model_state_dict) > 0:
+                try:
+                    from app.utils.secret_sharing import SecretSharingUtils
+                    flat_weights, _ = SecretSharingUtils.flatten_weights(model_state_dict)
+                    print(f"[OK] Successfully created flat_weights from model_state_dict")
+                except Exception as e:
+                    print(f"[ERROR] Could not flatten weights: {e}")
+                    flat_weights = None
+            else:
+                print(f"[ERROR] Invalid model_state_dict in consensus result")
+                flat_weights = None
+            
+            # Nếu vẫn là None, retornar sem consensus
+            if flat_weights is None:
+                consensus_result = {
+                    "status": "ACCEPTED",
+                    "cluster_id": cluster_id,
+                    "model_state_dict": model_state_dict,
+                    "storage_uri": f"memory://cluster_{cluster_id}",
+                    "data": {"accuracy": 0.0, "votes": {}}
+                }
+                return consensus_result
 
         active_committee = self.current_committee
         threshold = self.t_threshold
@@ -1359,6 +1500,8 @@ class SimulationEngine:
         metadata = res['metadata']
         proposer = self.current_proposer
         threshold = self.t_threshold
+        cluster_head_id = res["cluster_head_id"]
+
 
         # Tái tạo Model
         reconstructed_model = proposer.reconstruct_model(decrypted_shares,metadata, threshold)
@@ -1408,7 +1551,9 @@ class SimulationEngine:
         # Smart Contract (Thưởng/Phạt)
         self.blockchain.execute_smart_contract(
             proposer_id=proposer.id,
+            cluster_head_id=cluster_head_id,
             cluster_members=res.get('cluster_members', []),
+            rejected_workers=res.get('rejected_workers', []),
             votes=votes,
             accuracy=final_acc,
             is_good_update=is_approved
@@ -1447,7 +1592,8 @@ class SimulationEngine:
             if res.get('status') == 'ACCEPTED':
                 cid_id = res['cluster_id']
                 model_state = res.get('model_state_dict')
-                if model_state:
+                # Kiểm tra model_state là dict có dữ liệu, không phải boolean evaluation
+                if isinstance(model_state, dict) and len(model_state) > 0:
                     ipfs_cid = self.storage.upload_model(model_state=model_state)
                     new_k_models_cids[cid_id] = ipfs_cid # Hash của file
                     print(f" -> Cluster {cid_id} uploaded to Storage (CID: {ipfs_cid[:4]})")
@@ -1503,7 +1649,14 @@ class SimulationEngine:
             
             # 3. Tính khoảng cách Euclide
             for key in target_cluster_state:
+                # Kiểm tra key có phải string trước khi dùng 'in'
+                if not isinstance(key, str):
+                    continue
+                    
                 if 'weight' in key or 'bias' in key:
+                    if key not in worker_state:
+                        continue
+                        
                     w_tensor = worker_state[key].float().cpu()
                     c_tensor = target_cluster_state[key].float().cpu()
                     

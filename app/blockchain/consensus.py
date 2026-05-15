@@ -19,6 +19,7 @@ class Blockchain:
         self.committee = []
         self.reputation_scores = {}
         self.fault = {}
+        self.reward = {}
         self.storage_dir = storage_dir
         # all_nodes = committee_config.get('workers', [])
         os.makedirs(storage_dir, exist_ok=True)
@@ -37,6 +38,11 @@ class Blockchain:
         for node in all_nodes:
             node_id = node.id if hasattr(node, 'id') else node
             self.fault[node_id] = 0
+
+    def initialize_rewards(self, all_nodes):
+        for node in all_nodes:
+            node_id = node.id if hasattr(node, 'id') else node
+            self.reward[node_id] = 0
 
     # Các hàm hỗ trợ lưu và tải k-models
     def _save_model_offchain(self, model_state_dict, cluster_id, model_hash):
@@ -104,28 +110,41 @@ class Blockchain:
     def execute_smart_contract(
         self,
         proposer_id,
+        cluster_head_id,
+        rejected_workers,
         accuracy,
         is_good_update,
         votes,
         cluster_members
     ):
         print("\n--- SMART CONTRACT V2 ---")
+        print(f"\n-cluster_head_id: {cluster_head_id}")
+        print(f"\n-proposer_id: {proposer_id}")
+        print(f"\n-rejected_workers: {rejected_workers}")
 
-        # === 1. Thưởng/Phạt cho CLUSTER HEAD (PROPOSER) ===
+        # === 1. Thưởng/Phạt cho CLUSTER HEAD và PROPOSER ===
         if is_good_update:
-            self.reputation_scores[proposer_id] += accuracy
+            # self.reputation_scores[proposer_id] += accuracy
+            self.reward[cluster_head_id] += Config.REWARD_SUCCESSFUL_BLOCK * accuracy
+            self.reward[proposer_id] += Config.REWARD_SUCCESSFUL_BLOCK * accuracy
         else:
-            self.reputation_scores[proposer_id] -= Config.PENALTY
-
+            self.fault[cluster_head_id] += 0.5
+        
         # === 2. Thưởng/Phạt cho THÀNH VIÊN CỤM (CLUSTER MEMBERS) ===
         for member in cluster_members:
-            if member == proposer_id:
-                continue  # tránh cộng trùng CH
+            if member in rejected_workers:
+                self.fault[member] += 1
+                continue  # không thưởng phạt thêm nếu đã bị phạt vì update xấu
+
+            # if member == proposer_id:
+            #     continue  # tránh cộng trùng CH
 
             if is_good_update:
-                self.reputation_scores[member] += accuracy
+                # self.reputation_scores[member] += accuracy
+                self.reward[member] += accuracy
             else:
-                self.reputation_scores[member] -= Config.PENALTY
+                # self.reputation_scores[member] -= Config.PENALTY
+                self.fault[member] += 1
 
         # === 3. Thưởng/Phạt cho VALIDATORS (COMMITTEE) ===
         # Chia đều điểm thưởng cho các validator
@@ -135,21 +154,21 @@ class Blockchain:
                 continue  # không vote → không thưởng phạt
             # vote đúng
             if vote == is_good_update:
-                self.reputation_scores[validator] += Scom * accuracy
-                print(f"Validator {validator} rewarded +{Scom * accuracy}")
+                self.reward[validator] += Scom * accuracy
+                # print(f"Validator {validator} rewarded +{Scom * accuracy}")
 
             # vote sai
             else:
                 # vote cho model xấu -> phạt nặng
                 if vote and not is_good_update:
-                    # self.fault[validator] += 1
-                    self.reputation_scores[proposer_id] -= Config.PENALTY
+                    self.fault[validator] += 1
+                    # self.reputation_scores[proposer_id] -= Config.PENALTY
                     # print(f"Validator {validator} heavy penalty (Fault +1)")
 
                 # từ chối model tốt -> phạt nhẹ
                 elif not vote and is_good_update:
-                    # self.fault[validator] += 0.5
-                    self.reputation_scores[proposer_id] -= Config.PENALTY / 2
+                    self.fault[validator] += 0.5
+                    # self.reputation_scores[proposer_id] -= Config.PENALTY / 2
                     # print(f"Validator {validator} light penalty (Fault +0.5)")
 
         print("--- END SMART CONTRACT ---\n")

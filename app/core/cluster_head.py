@@ -9,6 +9,8 @@ from app.core.worker import WorkerNode
 from app.blockchain.proposer import Proposer
 from app.models.cnn import get_model
 from app.utils.secret_sharing import SecretSharingUtils
+# from app.blockchain.consensus import Blockchain
+
 # Class này xử lý CoCo lọc BALANCE và tổng hợp
 class ClusterHead(Proposer):
     def __init__(self, cluster_id, config, device, committee_info=None):
@@ -40,6 +42,8 @@ class ClusterHead(Proposer):
         self.committee = []
         self.threshold = None
         self.num_committee = None
+
+        self.rejected_workers = [] # Lưu trữ ID của các worker bị từ chối ở bước BALANCE
 
     def set_committee_info(self, committee_config):
         if committee_config is not None:
@@ -218,20 +222,26 @@ class ClusterHead(Proposer):
                 # Nếu model nổ, khoảng cách coi như cực lớn hoặc 0 tuỳ logic hiển thị
                 dist = 1000.0
             distances.append(dist)
+
             updates_with_distance.append((dist, worker_id, update))
 
         # 3. Tính ngưỡng thích nghi (Adaptive Threshold)
         threshold = Balance.calculate_adaptive_threshold(global_norm, distances, round_k)
 
         # 4. Lọc bỏ các model vượt quá ngưỡng
+        rejected = []
         valid_updates = []
+
         for dist, worker_id, update in updates_with_distance:
             if dist <= threshold:
                 valid_updates.append(update)
             else:
                 self.blocked_ids_this_round.add(worker_id)
+                rejected.append(worker_id)
+
                 print(f"[Refuse] Update rejected! Dist ({dist:.4f}) > Threshold ({threshold:.4f})")
 
+        self.rejected_workers = rejected
         print(f"Cluster {self.cluster_id}: Accepted {len(valid_updates)}/{len(self.pending_models)} updates.")
         return valid_updates
     
@@ -241,6 +251,15 @@ class ClusterHead(Proposer):
         Hàm helper: Tạo mảnh và Mã hóa cho một Ủy ban cụ thể.
         Được dùng trong aggregate() và dùng lại khi View Change.
         """
+        # Validate flat_weights
+        if not isinstance(flat_weights, torch.Tensor):
+            print(f"[ERROR] flat_weights is not a Tensor: type={type(flat_weights)}")
+            return {}
+        
+        if flat_weights.numel() == 0:
+            print(f"[ERROR] flat_weights is empty (0 elements)")
+            return {}
+        
         sorted_committee = sorted(committee, key=lambda x: x.id)
         committee_ids = sorted([n.id for n in sorted_committee])
 
@@ -308,14 +327,24 @@ class ClusterHead(Proposer):
         model_norm = compute_model_norm(avg_state)
         # Tính Hash
         model_hash = compute_model_hash(avg_state)
+        
         ## Phân mảnh bí mật (SHAMIR SECRET SHARING)
-        flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
+        try:
+            flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
+        except Exception as e:
+            # Nếu lỗi khi flatten (vd: avg_state rỗng), dùng model cũ
+            print(f"[ClusterHead {self.cluster_id}] Error flattening: {e}")
+            flat_weights = None
+            metadata = {}
 
         # with open("avg_model.txt", "w", encoding="utf-8") as f:
         #     f.write(str(avg_state))
         # Tạo n mảnh bí mật
         # t: Ngưỡng, n: số thành viên ủy ban
-        encrypted_packets = self.distribute_shares_to_committee(flat_weights=flat_weights, committee=self.committee)
+        if flat_weights is not None:
+            encrypted_packets = self.distribute_shares_to_committee(flat_weights=flat_weights, committee=self.committee)
+        else:
+            encrypted_packets = None
 
         self.pending_models = []
         
@@ -325,8 +354,10 @@ class ClusterHead(Proposer):
             "encrypted_shares": encrypted_packets,
             "model_hash": model_hash,
             "model_norm": model_norm,
-            "flat_weights": flat_weights
+            "flat_weights": flat_weights,
+            "model_state_dict": avg_state  # AGREGADO: retornar também o state_dict
         }
+
     
     def calculate_traffic(self):
         """Tính toán lượng dữ liệu CH gửi đi trong vòng này"""
