@@ -10,6 +10,7 @@ from app.utils.data_loader import get_dataloader, get_dataloader_from_indices
 from app.models.cnn import get_model
 import torch.nn.functional as F
 from app.core.ipfs import StorageService
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 # Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
     def __init__(self, node_id, config, device):
@@ -19,8 +20,9 @@ class WorkerNode:
         # self.data_loader = data_loader
         self.dataset_name = config.get('dataset', 'cifar10')
         self.batch_size = config.get('batch_size', 32)
-        self.epochs = config.get('epochs',5)
+        self.epochs = config.get('epochs',1)
         self.epoch_loss = 0.0
+        self.local_test_loader = None
         
         # Khởi tạo DataLoader mặc định (IID)
         num_workers = config.get('num_workers', 10)
@@ -28,6 +30,8 @@ class WorkerNode:
             self.dataset_name, self.id, num_workers, self.batch_size
         )
         model_name = config.get('model', 'simple_cnn')
+        # 🔑 CHANGE: Initialize model on device directly (not CPU first)
+        # This reduces CPU→GPU transfers
         self.model = get_model(model_name, num_classes=self.num_classes).to(self.device)
 
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
@@ -116,24 +120,32 @@ class WorkerNode:
         return downloaded_models
 
     def evaluate_loss_on_model(self, model_state):
-        """Bước 1: Tính Loss để chọn cụm, (DFCA)"""
-        self.model.load_state_dict(model_state) # load learned weights of model
+        """
+        Tính Loss để chọn cụm (DFCA). ✅ OPTIMIZED: Keep model on GPU
+        """
+        self.model.load_state_dict(model_state)
+        self.model = self.model.to(self.device)
         self.model.eval()
         
         total_loss = 0.0
         total_samples = 0
         loss_fn = torch.nn.CrossEntropyLoss()
         
-        with torch.no_grad():
-            for X, y in self.data_loader:
-                X, y = X.to(self.device), y.to(self.device)
-                preds = self.model(X)
-                loss = loss_fn(preds, y) 
-                
-                total_loss += loss.item() * X.size(0)
-                total_samples += X.size(0)
-                
-        return total_loss / total_samples if total_samples > 0 else float('inf')
+        try:
+            with torch.no_grad():
+                for X, y in self.data_loader:
+                    X, y = X.to(self.device), y.to(self.device)
+                    preds = self.model(X)
+                    loss = loss_fn(preds, y)
+                    total_loss += loss.item() * X.size(0)
+                    total_samples += X.size(0)
+            
+            return total_loss / total_samples if total_samples > 0 else float('inf')
+        finally:
+            # 🔑 CHANGE: DON'T move to CPU - keep model on GPU
+            # This allows subsequent operations to use GPU directly
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def join_cluster(self, cluster_models):
         """Worker tự chọn cụm có Loss thấp nhất"""
@@ -180,58 +192,122 @@ class WorkerNode:
     #             "loss": loss
     #         }
         # return self.attack_strategy.execute(self)
-    def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
+    # def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
+    #     """
+    #     LDP dạng thưa (Sparse LDP):
+    #     Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
+    #     Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
+    #     """
+    #     if not Config.ENABLE_LDP:
+    #         return delta
+
+    #     noisy_delta = {}
+        
+    #     # 1. Tính toán ngưỡng Top-k
+    #     all_values = []
+    #     for v in delta.values():
+    #         if v.dtype in [torch.float, torch.float32]:
+    #             all_values.append(v.view(-1).abs())
+        
+    #     if not all_values: return delta
+        
+    #     full_vec = torch.cat(all_values)
+    #     total_params = full_vec.numel()
+    #     k = int(total_params * sparsity)
+    #     if k < 1: k = 1
+        
+    #     # Tìm giá trị ngưỡng (threshold) để lọt vào top k
+    #     top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
+
+    #     # 2. Lấy Sigma và Clipping Threshold
+    #     # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
+    #     clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
+    #     sigma = LDP.get_ldp_sigma()
+    #     print(f"SIgma applied in LDP for model: {sigma}")
+        
+    #     # 3. Áp dụng Mask & Noise
+    #     for k, v in delta.items():
+    #         if v.dtype not in [torch.float, torch.float32]:
+    #             noisy_delta[k] = v
+    #             continue
+
+    #         # Mask: 1 nếu thuộc Top-k, 0 nếu không
+    #         mask = (v.abs() >= top_k_threshold).float()
+            
+    #         # Clipping: Cắt update trong khoảng [-C, C]
+    #         # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
+    #         clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
+            
+    #         # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
+    #         noise = torch.normal(0, sigma, v.shape, device=self.device)
+            
+    #         # Update mới = (Clipped_Update + Noise) * Mask
+    #         # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
+    #         noisy_delta[k] = (clipped_v + noise) * mask
+            
+    #     return noisy_delta
+    def apply_ldp_sparse(self, delta, sparsity=0.01):
         """
-        LDP dạng thưa (Sparse LDP):
-        Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
-        Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
+        LDP dạng thưa (Sparse LDP) - Phiên bản Hợp nhất (Unified)
+        Hoạt động an toàn cho cả SimpleCNN (không BN) và VGG/ResNet (có BN).
         """
         if not Config.ENABLE_LDP:
             return delta
 
         noisy_delta = {}
+        trainable_keys = []
         
-        # 1. Tính toán ngưỡng Top-k
-        all_values = []
-        for v in delta.values():
-            if v.dtype in [torch.float, torch.float32]:
-                all_values.append(v.view(-1).abs())
-        
-        if not all_values: return delta
+        # 1. BỘ LỌC THÔNG MINH (Bỏ qua BatchNorm stats & non-floats)
+        for k, v in delta.items():
+            # Nếu là SimpleCNN, điều kiện 'running' sẽ false -> lọt vào else an toàn
+            if 'running' in k or 'num_batches' in k or v.dtype not in [torch.float, torch.float32]:
+                noisy_delta[k] = v  # Giữ nguyên, không cộng nhiễu
+            else:
+                trainable_keys.append(k)
+
+        # 2. Tính toán ngưỡng Top-k
+        all_values = [delta[k].view(-1).abs() for k in trainable_keys]
+        if not all_values: 
+            return noisy_delta
         
         full_vec = torch.cat(all_values)
         total_params = full_vec.numel()
-        k = int(total_params * sparsity)
-        if k < 1: k = 1
+        k = max(1, int(total_params * sparsity))
         
-        # Tìm giá trị ngưỡng (threshold) để lọt vào top k
+        # Tìm giá trị ngưỡng (threshold)
         top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
 
-        # 2. Lấy Sigma và Clipping Threshold
-        # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
+        # 3. Lấy tham số LDP
         clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
         sigma = LDP.get_ldp_sigma()
-        print(f"SIgma applied in LDP for model: {sigma}")
+        print(f"Sigma applied in LDP for model: {sigma}")
         
-        # 3. Áp dụng Mask & Noise
-        for k, v in delta.items():
-            if v.dtype not in [torch.float, torch.float32]:
-                noisy_delta[k] = v
-                continue
+        # 4. Tính L2 Norm của các phần tử Top-k (Chuẩn DP-SGD)
+        sparse_norm_sq = 0.0
+        for key in trainable_keys:
+            v = delta[key]
+            mask = (v.abs() >= top_k_threshold).float()
+            sparse_norm_sq += torch.sum((v * mask) ** 2).item()
+            
+        sparse_norm = (sparse_norm_sq ** 0.5)
+        # Hệ số thu nhỏ (Chỉ thu nhỏ nếu norm > ngưỡng)
+        clip_factor = max(1.0, sparse_norm / clip_threshold)
 
+        # 5. Áp dụng Clipping, Nhiễu & Mask
+        for key in trainable_keys:
+            v = delta[key]
+            
             # Mask: 1 nếu thuộc Top-k, 0 nếu không
             mask = (v.abs() >= top_k_threshold).float()
             
-            # Clipping: Cắt update trong khoảng [-C, C]
-            # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
-            clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
+            # Clipping toàn cục (Giữ nguyên hướng của Vector Update tốt hơn torch.clamp)
+            clipped_v = v / clip_factor
             
-            # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
-            noise = torch.normal(0, sigma, v.shape, device=self.device)
+            # Tạo nhiễu (Dùng v.device để không bị lỗi xung đột CPU/GPU)
+            noise = torch.normal(0, sigma, v.shape, device=v.device)
             
-            # Update mới = (Clipped_Update + Noise) * Mask
-            # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
-            noisy_delta[k] = (clipped_v + noise) * mask
+            # Update mới = (Clipped + Noise) * Mask
+            noisy_delta[key] = (clipped_v + noise) * mask
             
         return noisy_delta
     def train(self):
@@ -243,61 +319,78 @@ class WorkerNode:
         3. Tính Delta = W_new - W_old.
         4. Apply LDP lên Delta.
         5. Trả về W_final = W_old + Noisy_Delta.
+        
+        ✅ OPTIMIZED: Keep model on GPU throughout, LDP works on GPU tensors
         """
-        # BƯỚC 1: Snapshot model hiện tại (W_old) trước khi train
-        # Cần clone() để không bị thay đổi theo reference
+        # BƯỚC 1: Đảm bảo model ở GPU, snapshot W_old
+        self.model = self.model.to(self.device)
         w_old = {k: v.clone().detach() for k, v in self.model.state_dict().items()}
         
         weights_new = None
         train_loss = None
-
+        
+        # Khởi tạo lại Optimizer ở mỗi vòng để xóa sạch Momentum cũ
+        self.optimizer = torch.optim.SGD(
+            self.model.parameters(), 
+            lr=Config.LEARNING_RATE,
+            momentum=0.9,
+            weight_decay=1e-4 
+        )
+        
         # BƯỚC 2: Thực hiện Training hoặc Tấn công
-        if self.attack_strategy.is_malicious:
-            # Kẻ tấn công trả về weights độc hại
-            weights_new = self.attack_strategy.execute(self)
-            train_loss = None # Hoặc loss giả
-        else:
-            # Node thường train bình thường
-            weights_new, train_loss = self._standard_train()
+        try:
+            if self.attack_strategy.is_malicious:
+                weights_new = self.attack_strategy.execute(self)
+                train_loss = None
+            else:
+                weights_new, train_loss = self._standard_train()
 
-        # BƯỚC 3 & 4: Tính Delta và Áp dụng LDP
-        # Chỉ áp dụng LDP nếu được bật trong Config
-        if Config.ENABLE_LDP:
-            # a. Tính Delta (Update)
-            delta = {}
-            final_weights = {}
-            untouched_params = {}
-            for k in weights_new.keys():
-                if k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
-                    delta[k] = weights_new[k] - w_old[k]
-                else:
-                    # Giữ nguyên các tham số không train được (batchnorm stats, long types...)
-                    untouched_params[k] = weights_new[k] 
+            # BƯỚC 3 & 4: Tính Delta trên GPU và Áp dụng LDP
+            if Config.ENABLE_LDP and self.config.get('system_mode') == 'PROPOSED':
+                # a. Tính Delta - KEEP ON GPU
+                delta = {}
+                final_weights = {}
+                untouched_params = {}
+                
+                for k in weights_new.keys():
+                    if k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                        # Keep on GPU for LDP processing
+                        delta[k] = weights_new[k].to(self.device) - w_old[k].to(self.device)
+                    else:
+                        untouched_params[k] = weights_new[k].to(self.device)
 
-            # b. Cộng nhiễu vào Delta (Lúc này Threshold C có thể nhỏ, v.d 0.1)
-            # Hàm apply_ldp của bạn sẽ kẹp delta vào [-C, C] rồi cộng nhiễu
-            noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.05)
+                # b. Áp dụng LDP lên GPU tensors (apply_ldp_sparse đã support device)
+                noisy_delta = self.apply_ldp_sparse(delta, sparsity=0.2)
 
-            # c. Tái tạo lại Model Weights (W_final = W_old + Noisy_Delta)
-            
-            for k in weights_new.keys():
-                if k in noisy_delta and k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
-                    final_weights[k] = w_old[k] + noisy_delta[k]
-                elif k in untouched_params:
-                    final_weights[k] = untouched_params[k]
-                else:
-                    final_weights[k] = weights_new[k]
-        else:
-            # Nếu không dùng LDP thì trả về nguyên gốc
-            final_weights = weights_new
+                # c. Tái tạo Model Weights trên GPU
+                for k in weights_new.keys():
+                    if k in noisy_delta and k in w_old and weights_new[k].dtype in [torch.float, torch.float32]:
+                        final_weights[k] = (w_old[k].to(self.device) + noisy_delta[k]).cpu()
+                    elif k in untouched_params:
+                        final_weights[k] = untouched_params[k].cpu()
+                    else:
+                        final_weights[k] = weights_new[k].cpu()
+            else:
+                # Nếu không dùng LDP thì trả về nguyên gốc (convert to CPU for storage)
+                final_weights = {k: v.cpu() if isinstance(v, torch.Tensor) else v 
+                                for k, v in weights_new.items()}
 
-        # Cập nhật lại model của worker với weights cuối cùng (để đồng bộ)
-        self.model.load_state_dict(final_weights)
+            # Cập nhật model và GIỮ TRÊN GPU cho phase tiếp theo
+            self.model.load_state_dict(final_weights)
+            self.model = self.model.to(self.device)
 
-        return {
-            "weights": final_weights,
-            "loss": train_loss
-        }
+            return {
+                "weights": final_weights,
+                "loss": train_loss
+            }
+        except Exception as e:
+            print(f"[Worker {self.id}] Error in train(): {e}")
+            raise
+        finally:
+            # 🔑 CHANGE: DON'T move model to CPU - keep on device for aggregation
+            # Only clear cache to free memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     def _standard_train(self):
         self.model.train()
@@ -312,6 +405,8 @@ class WorkerNode:
                 output = self.model(data)
                 loss = self.criterion(output, target)
                 loss.backward()
+                # Cắt gọn gradient
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=2.0)
                 self.optimizer.step()
                 batch_losses.append(loss.item())
             _cal_epoch_loss = sum(batch_losses) / len(batch_losses) if batch_losses else 0.0
@@ -498,15 +593,20 @@ class WorkerNode:
             self.model.load_state_dict(updated_params)
             print(f"[Worker {self.id}] Updated MAIN model via Gossip from Cluster {neighbor_cluster_id} (r={r+1})")
     
-    def apply_new_indices(self, indices, dataset_name):
+    def apply_new_indices(self, train_indices, test_indices, dataset_name):
         """Được gọi bởi Scenario Class để gán dữ liệu mới"""
-        self.data_indices = indices
+        # self.data_indices = indices
         
-        # Hàm này sẽ tạo DataLoader từ danh sách index có sẵn, không cần tính toán lại
+        # Tạo dataloader cho trrain
         self.data_loader, self.num_classes, _ = get_dataloader_from_indices(
-            dataset_name, indices=indices, batch_size=32,train=True
+            dataset_name, indices=train_indices, batch_size=32,train=True
         )
-        print(f"[Worker {self.id}] Applied new dataset partition ({len(indices)} samples)")
+
+        # Tạo dataloader cho Local Test
+        self.local_test_loader, _, _ = get_dataloader_from_indices(
+            dataset_name=dataset_name, indices=test_indices, batch_size=32, train=False
+        )
+        print(f"[Worker {self.id}] Applied new dataset partition ({len(train_indices)} samples)")
 
     @property
     def is_malicious(self):
@@ -514,174 +614,459 @@ class WorkerNode:
         from app.core.attacks import HonestStrategy
         return self.attack_strategy is not None and not isinstance(self.attack_strategy, HonestStrategy)
     
-    def evaluate_gaussian_metrics(self, test_loader):
-        """
-        Đánh giá chi tiết: Trả về Accuracy, Loss và MSE.
-        """
-        for param in self.model.parameters():
-            if torch.isnan(param).any() or torch.isinf(param).any():
-                print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
-                return {
-                    "accuracy": 0.0,
-                    "error_rate": 1.0,
-                    "loss": 10000.0, # Giá trị Loss cực lớn tượng trưng
-                    "mse": 1.0       # MSE max (giữa 0 và 1) thường là 1 hoặc 2
-                }
-        self.model.eval()
-        test_loss = 0
-        correct = 0
-        total_mse = 0.0
-        total_samples = 0
-        
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                
-                # Forward
-                logits = self.model(data)
-                probs = F.softmax(logits, dim=1) # Chuyển về xác suất [0, 1]
-                
-                # 1. Tính CrossEntropy Loss (Mặc định)
-                test_loss += self.criterion(logits, target).item()
-                
-                # 2. Tính Accuracy
-                pred = logits.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-                
-                # 3. Tính MSE (Mean Squared Error)
-                # Cần one-hot encode target để so sánh với vector xác suất
-                target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
-                batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
-                total_mse += batch_mse
-                
-                total_samples += len(data)
+    #------------------------------------Thử nghiệm hàm evaluate mơi--------------------------------------------------
+    # def evaluate_gaussian_metrics(self, test_loader):
+    #     """
+    #     Đánh giá chi tiết: Trả về Accuracy, Loss và MSE.
+    #     """
+    #     for param in self.model.parameters():
+    #         if torch.isnan(param).any() or torch.isinf(param).any():
+    #             print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
+    #             return {
+    #                 "accuracy": 0.0,
+    #                 "error_rate": 1.0,
+    #                 "loss": 10000.0, # Giá trị Loss cực lớn tượng trưng
+    #                 "mse": 1.0       # MSE max (giữa 0 và 1) thường là 1 hoặc 2
+    #             }
+    #     self.model.to(self.device)
+    #     self.model.eval()
+    #     test_loss = 0
+    #     correct = 0
+    #     total_mse = 0.0
+    #     total_samples = 0
+    #     try:
+    #         with torch.no_grad():
+    #             for data, target in test_loader:
+    #                 data, target = data.to(self.device), target.to(self.device)
+                    
+    #                 # Forward
+    #                 logits = self.model(data)
+    #                 probs = F.softmax(logits, dim=1) # Chuyển về xác suất [0, 1]
+                    
+    #                 # 1. Tính CrossEntropy Loss (Mặc định)
+    #                 test_loss += self.criterion(logits, target).item()
+                    
+    #                 # 2. Tính Accuracy
+    #                 pred = logits.argmax(dim=1, keepdim=True)
+    #                 correct += pred.eq(target.view_as(pred)).sum().item()
+                    
+    #                 # 3. Tính MSE (Mean Squared Error)
+    #                 # Cần one-hot encode target để so sánh với vector xác suất
+    #                 target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
+    #                 batch_mse = F.mse_loss(probs, target_one_hot, reduction='sum').item()
+    #                 total_mse += batch_mse
+                    
+    #                 total_samples += len(data)
 
-        # Tổng hợp kết quả
-        avg_loss = test_loss / len(test_loader)
-        accuracy = correct / total_samples
-        avg_mse = total_mse / total_samples
-        
-        # Error Rate = 1 - Accuracy
-        error_rate = 1.0 - accuracy
+    #         # Tổng hợp kết quả
+    #         avg_loss = test_loss / len(test_loader)
+    #         accuracy = correct / total_samples
+    #         avg_mse = total_mse / total_samples
+            
+    #         # Error Rate = 1 - Accuracy
+    #         error_rate = 1.0 - accuracy
 
-        return {
-            "accuracy": accuracy,
-            "error_rate": error_rate,
-            "loss": avg_loss,
-            "mse": avg_mse
-        }
+    #         return {
+    #             "accuracy": accuracy,
+    #             "error_rate": error_rate,
+    #             "loss": avg_loss,
+    #             "mse": avg_mse
+    #         }
+    #     finally:
+    #         self.model.to('cpu')
     
-    def evaluate_label_flipping(self, test_loader, src_class, tgt_class):
-        """
-        Chuyên dùng cho Label Flipping: Tính ASR, Recall, Precision.
-        """
-        self.model.eval()
-        correct = 0
-        total = 0
+    # def evaluate_label_flipping(self, test_loader, src_class, tgt_class):
+    #     """
+    #     Chuyên dùng cho Label Flipping: Tính ASR, Recall, Precision.
+    #     """
+    #     self.model.eval()
+    #     self.model.to(self.device)
+    #     correct = 0
+    #     total = 0
         
-        # Biến đếm riêng cho LF
-        src_total = 0
-        src_correct = 0
-        src_flipped_to_tgt = 0 # Tử số của ASR
+    #     # Biến đếm riêng cho LF
+    #     src_total = 0
+    #     src_correct = 0
+    #     src_flipped_to_tgt = 0 # Tử số của ASR
         
-        tgt_pred_total = 0
-        tgt_true_positive = 0
+    #     tgt_pred_total = 0
+    #     tgt_true_positive = 0
+    #     try:
+    #         with torch.no_grad():
+    #             for data, target in test_loader:
+    #                 data, target = data.to(self.device), target.to(self.device)
+    #                 logits = self.model(data)
+    #                 preds = logits.argmax(dim=1)
+                    
+    #                 # Metric cơ bản
+    #                 correct += preds.eq(target).sum().item()
+    #                 total += len(target)
 
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                logits = self.model(data)
-                preds = logits.argmax(dim=1)
-                
-                # Metric cơ bản
-                correct += preds.eq(target).sum().item()
-                total += len(target)
+    #                 # Metric Label Flipping
+    #                 # 1. Source Class stats
+    #                 src_mask = (target == src_class)
+    #                 src_total += src_mask.sum().item()
+    #                 src_correct += (preds[src_mask] == src_class).sum().item()
+    #                 src_flipped_to_tgt += (preds[src_mask] == tgt_class).sum().item()
 
-                # Metric Label Flipping
-                # 1. Source Class stats
-                src_mask = (target == src_class)
-                src_total += src_mask.sum().item()
-                src_correct += (preds[src_mask] == src_class).sum().item()
-                src_flipped_to_tgt += (preds[src_mask] == tgt_class).sum().item()
+    #                 # 2. Target Class stats
+    #                 tgt_pred_mask = (preds == tgt_class)
+    #                 tgt_pred_total += tgt_pred_mask.sum().item()
+    #                 tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
 
-                # 2. Target Class stats
-                tgt_pred_mask = (preds == tgt_class)
-                tgt_pred_total += tgt_pred_mask.sum().item()
-                tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
-
-        return {
-            "accuracy": correct / total,
-            "error_rate": 1.0 - (correct / total),
-            "src_recall": src_correct / (src_total + 1e-9),
-            "asr": src_flipped_to_tgt / (src_total + 1e-9),
-            "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9)
-        }
+    #         return {
+    #             "accuracy": correct / total,
+    #             "error_rate": 1.0 - (correct / total),
+    #             "src_recall": src_correct / (src_total + 1e-9),
+    #             "asr": src_flipped_to_tgt / (src_total + 1e-9),
+    #             "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9)
+    #         }
+    #     finally:
+    #         self.model.to('cpu')
     
-    def evaluate_backdoor(self, test_loader, target_class):
-        """
-        Đánh giá kịch bản Backdoor.
-        Trả về:
-        - Clean Accuracy (BA): Độ chính xác trên dữ liệu sạch.
-        - Attack Success Rate (ASR): Tỷ lệ dữ liệu có trigger bị nhận diện thành target_class.
-        """
-        for param in self.model.parameters():
-            if torch.isnan(param).any() or torch.isinf(param).any():
-                print(f"[Worker {self.id}] Backdoor Check: Model params NaN/Inf -> Return Worst.")
-                return {
-                    "accuracy": 0.0,
-                    "error_rate": 1.0,
-                    "loss": 10000.0,
-                    "asr": 0.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
-                }
-        self.model.eval()
+    # def evaluate_backdoor(self, test_loader, target_class):
+    #     """
+    #     Đánh giá kịch bản Backdoor.
+    #     Trả về:
+    #     - Clean Accuracy (BA): Độ chính xác trên dữ liệu sạch.
+    #     - Attack Success Rate (ASR): Tỷ lệ dữ liệu có trigger bị nhận diện thành target_class.
+    #     """
+    #     for param in self.model.parameters():
+    #         if torch.isnan(param).any() or torch.isinf(param).any():
+    #             print(f"[Worker {self.id}] Backdoor Check: Model params NaN/Inf -> Return Worst.")
+    #             return {
+    #                 "accuracy": 0.0,
+    #                 "error_rate": 1.0,
+    #                 "loss": 10000.0,
+    #                 "asr": 1.0 # Model hỏng thì ASR coi như 0 (hoặc 1 tuỳ định nghĩa)
+    #             }
+    #     self.model.to(self.device)
+    #     self.model.eval()
         
-        # Metrics cho dữ liệu SẠCH (Main Task)
-        clean_correct = 0
-        clean_total = 0
-        clean_loss = 0
+    #     # Metrics cho dữ liệu SẠCH (Main Task)
+    #     clean_correct = 0
+    #     clean_total = 0
+    #     clean_loss = 0
         
-        # Metrics cho dữ liệu BACKDOOR
-        bd_success = 0 # Số mẫu có trigger bị đoán thành target_class
-        bd_total = 0   # Tổng số mẫu dùng để test backdoor
-        
-        with torch.no_grad():
-            for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                
-                # --- 1. ĐÁNH GIÁ TRÊN CLEAN DATA ---
-                logits = self.model(data)
-                clean_loss += self.criterion(logits, target).item()
-                preds = logits.argmax(dim=1)
-                
-                clean_correct += preds.eq(target).sum().item()
-                clean_total += len(target)
-                
-                # --- 2. ĐÁNH GIÁ TRÊN TRIGGERED DATA (ASR) ---
-                # Chỉ đánh giá ASR trên các mẫu KHÔNG thuộc target_class
-                # (Vì nếu ảnh gốc đã là target_class thì đoán đúng không tính là tấn công thành công)
-                non_target_indices = (target != target_class)
-                
-                if non_target_indices.sum().item() > 0:
-                    # Lấy ra các ảnh không phải target
-                    data_bd = data[non_target_indices].clone()
+    #     # Metrics cho dữ liệu BACKDOOR
+    #     bd_success = 0 # Số mẫu có trigger bị đoán thành target_class
+    #     bd_total = 0   # Tổng số mẫu dùng để test backdoor
+    #     try:
+    #         with torch.no_grad():
+    #             for data, target in test_loader:
+    #                 data, target = data.to(self.device), target.to(self.device)
                     
-                    # Gắn Trigger vào các ảnh này
-                    data_bd = self._add_trigger(data_bd)
+    #                 # --- 1. ĐÁNH GIÁ TRÊN CLEAN DATA ---
+    #                 logits = self.model(data)
+    #                 clean_loss += self.criterion(logits, target).item()
+    #                 preds = logits.argmax(dim=1)
                     
-                    # Dự đoán trên ảnh đã gắn trigger
-                    logits_bd = self.model(data_bd)
-                    preds_bd = logits_bd.argmax(dim=1)
+    #                 clean_correct += preds.eq(target).sum().item()
+    #                 clean_total += len(target)
                     
-                    # ASR: Bao nhiêu ảnh đã bị lái sang target_class?
-                    bd_success += (preds_bd == target_class).sum().item()
-                    bd_total += len(data_bd)
+    #                 # --- 2. ĐÁNH GIÁ TRÊN TRIGGERED DATA (ASR) ---
+    #                 # Chỉ đánh giá ASR trên các mẫu KHÔNG thuộc target_class
+    #                 # (Vì nếu ảnh gốc đã là target_class thì đoán đúng không tính là tấn công thành công)
+    #                 non_target_indices = (target != target_class)
+                    
+    #                 if non_target_indices.sum().item() > 0:
+    #                     # Lấy ra các ảnh không phải target
+    #                     data_bd = data[non_target_indices].clone()
+                        
+    #                     # Gắn Trigger vào các ảnh này
+    #                     data_bd = self._add_trigger(data_bd)
+                        
+    #                     # Dự đoán trên ảnh đã gắn trigger
+    #                     logits_bd = self.model(data_bd)
+    #                     preds_bd = logits_bd.argmax(dim=1)
+                        
+    #                     # ASR: Bao nhiêu ảnh đã bị lái sang target_class?
+    #                     bd_success += (preds_bd == target_class).sum().item()
+    #                     bd_total += len(data_bd)
 
-        return {
-            "accuracy": clean_correct / clean_total, # Main Task Accuracy
-            "error_rate": 1.0 - (clean_correct / clean_total),
-            "loss": clean_loss / len(test_loader),
-            "asr": bd_success / (bd_total + 1e-9)    # Backdoor ASR
-        }
+    #         return {
+    #             "accuracy": clean_correct / clean_total, # Main Task Accuracy
+    #             "error_rate": 1.0 - (clean_correct / clean_total),
+    #             "loss": clean_loss / len(test_loader),
+    #             "asr": bd_success / (bd_total + 1e-9)    # Backdoor ASR
+    #         }
+    #     finally:
+    #         self.model.to('cpu')
+
+    def evaluate_backdoor(self, target_class, k_models_dict=None, custom_test_loader=None):
+        """
+        Đánh giá kịch bản Backdoor. Hỗ trợ cả Baseline và Proposed.
+        """
+        loader = custom_test_loader if custom_test_loader is not None else getattr(self, 'local_test_loader', None)
+        if loader is None:
+            return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0, "asr": 1.0}
+
+        original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+        self.model.to(self.device)
+
+        try:
+            # --- TÌM MODEL TỐT NHẤT DỰA TRÊN DỮ LIỆU SẠCH ---
+            if k_models_dict:
+                best_loss = float('inf')
+                best_state = None
+                self.model.eval()
+                with torch.no_grad():
+                    for cid, model_state in k_models_dict.items():
+                        self.model.load_state_dict(model_state)
+                        client_loss = 0.0
+                        total = 0
+                        # Worker chỉ đánh giá loss sạch (Nó không biết về backdoor)
+                        for data, target in loader:
+                            data, target = data.to(self.device), target.to(self.device)
+                            outputs = self.model(data)
+                            client_loss += self.criterion(outputs, target).item() * data.size(0)
+                            total += data.size(0)
+                        
+                        avg_loss = client_loss / total if total > 0 else float('inf')
+                        if avg_loss < best_loss:
+                            best_loss = avg_loss
+                            best_state = model_state
+                
+                if best_state:
+                    self.model.load_state_dict(best_state)
+
+            # --- KIỂM TRA NAN/INF ---
+            for param in self.model.parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0, "asr": 1.0}
+
+            # --- BẮT ĐẦU ĐÁNH GIÁ (CLEAN & ASR) ---
+            self.model.eval()
+            clean_correct, clean_total, clean_loss = 0, 0, 0.0
+            bd_success, bd_total = 0, 0
+            
+            with torch.no_grad():
+                for data, target in loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    
+                    # 1. Đánh giá Clean Data
+                    logits = self.model(data)
+                    clean_loss += self.criterion(logits, target).item()
+                    preds = logits.argmax(dim=1)
+                    clean_correct += preds.eq(target).sum().item()
+                    clean_total += len(target)
+                    
+                    # 2. Đánh giá Backdoor (ASR)
+                    non_target_indices = (target != target_class)
+                    if non_target_indices.sum().item() > 0:
+                        data_bd = data[non_target_indices].clone()
+                        data_bd = self._add_trigger(data_bd) # Gọi hàm gắn trigger của bạn
+                        
+                        logits_bd = self.model(data_bd)
+                        preds_bd = logits_bd.argmax(dim=1)
+                        
+                        bd_success += (preds_bd == target_class).sum().item()
+                        bd_total += len(data_bd)
+
+            acc = clean_correct / clean_total if clean_total > 0 else 0.0
+            return {
+                "accuracy": acc,
+                "error_rate": 1.0 - acc,
+                "loss": clean_loss / len(loader),
+                "asr": bd_success / (bd_total + 1e-9)
+            }
+        finally:
+            self.model.load_state_dict(original_state)
+            self.model.to('cpu')
+    
+    def evaluate_gaussian_metrics(self, k_models_dict=None, custom_test_loader=None):
+        """
+        Đánh giá Gaussian Metrics. Hỗ trợ cả Baseline và Proposed (k-models).
+        """
+        loader = custom_test_loader if custom_test_loader is not None else getattr(self, 'local_test_loader', None)
+        if loader is None:
+            return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0, "mse": 1.0}
+
+        original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+        self.model.to(self.device)
+
+        try:
+            # --- TÌM MODEL TỐT NHẤT TRONG K-MODELS (Nếu là luồng Proposed) ---
+            if k_models_dict:
+                best_loss = float('inf')
+                best_state = None
+                self.model.eval()
+                with torch.no_grad():
+                    for cid, model_state in k_models_dict.items():
+                        self.model.load_state_dict(model_state)
+                        client_loss = 0.0
+                        total = 0
+                        for data, target in loader:
+                            data, target = data.to(self.device), target.to(self.device)
+                            outputs = self.model(data)
+                            client_loss += self.criterion(outputs, target).item() * data.size(0)
+                            total += data.size(0)
+                        
+                        avg_loss = client_loss / total if total > 0 else float('inf')
+                        if avg_loss < best_loss:
+                            best_loss = avg_loss
+                            best_state = model_state
+                
+                if best_state:
+                    self.model.load_state_dict(best_state) # Load model thắng cuộc
+
+            # --- KIỂM TRA NAN/INF ---
+            for param in self.model.parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0, "mse": 1.0}
+
+            # --- BẮT ĐẦU ĐÁNH GIÁ METRICS ---
+            self.model.eval()
+            test_loss, correct, total_mse, total_samples = 0.0, 0, 0.0, 0
+            
+            with torch.no_grad():
+                for data, target in loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    logits = self.model(data)
+                    probs = F.softmax(logits, dim=1)
+                    
+                    test_loss += self.criterion(logits, target).item()
+                    
+                    pred = logits.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    
+                    target_one_hot = F.one_hot(target, num_classes=self.num_classes).float()
+                    total_mse += F.mse_loss(probs, target_one_hot, reduction='sum').item()
+                    
+                    total_samples += len(data)
+
+            avg_loss = test_loss / len(loader)
+            accuracy = correct / total_samples if total_samples > 0 else 0.0
+            avg_mse = total_mse / total_samples if total_samples > 0 else 1.0
+
+            return {
+                "accuracy": accuracy,
+                "error_rate": 1.0 - accuracy,
+                "loss": avg_loss,
+                "mse": avg_mse
+            }
+        finally:
+            self.model.load_state_dict(original_state) # Phục hồi trọng số gốc
+            self.model.to('cpu')
+
+    def evaluate_label_flipping(self, src_class, tgt_class, k_models_dict=None, custom_test_loader=None):
+        """
+        Đánh giá Label Flipping (ASR, Recall, Precision) kết hợp F1-Score và AUC.
+        """
+        loader = custom_test_loader if custom_test_loader is not None else getattr(self, 'local_test_loader', None)
+        if loader is None:
+            return {"accuracy": 0.0, "error_rate": 1.0, "src_recall": 0.0, "asr": 1.0, "tgt_precision": 0.0, "f1": 0.0, "auc": 0.5}
+
+        original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+        self.model.to(self.device)
+
+        try:
+            # --- TÌM MODEL TỐT NHẤT TRONG K-MODELS ---
+            if k_models_dict:
+                best_loss = float('inf')
+                best_state = None
+                self.model.eval()
+                with torch.no_grad():
+                    for cid, model_state in k_models_dict.items():
+                        self.model.load_state_dict(model_state)
+                        client_loss = 0.0
+                        total = 0
+                        for data, target in loader:
+                            data, target = data.to(self.device), target.to(self.device)
+                            outputs = self.model(data)
+                            client_loss += self.criterion(outputs, target).item() * data.size(0)
+                            total += data.size(0)
+                        
+                        avg_loss = client_loss / total if total > 0 else float('inf')
+                        if avg_loss < best_loss:
+                            best_loss = avg_loss
+                            best_state = model_state
+                
+                if best_state:
+                    self.model.load_state_dict(best_state)
+
+            # --- BẮT ĐẦU ĐÁNH GIÁ ---
+            self.model.eval()
+            correct, total = 0, 0
+            src_total, src_correct, src_flipped_to_tgt = 0, 0, 0
+            tgt_pred_total, tgt_true_positive = 0, 0
+            
+            # Khởi tạo mảng lưu trữ cho F1 và AUC
+            all_targets = []
+            all_preds = []
+            all_probs = []
+
+            with torch.no_grad():
+                for data, target in loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    logits = self.model(data)
+                    probs = F.softmax(logits, dim=1) # Tính xác suất cho AUC
+                    preds = logits.argmax(dim=1)
+                    
+                    # 1. Thu thập dữ liệu mảng cho sklearn (F1, AUC)
+                    all_targets.extend(target.cpu().numpy())
+                    all_preds.extend(preds.cpu().numpy())
+                    all_probs.extend(probs.cpu().numpy())
+
+                    # 2. Logic tính toán cơ bản (Accuracy)
+                    correct += preds.eq(target).sum().item()
+                    total += len(target)
+
+                    # 3. Logic Label Flipping (ASR, Recall, Precision)
+                    # print(target, src_class, "Check SRC CLASS", flush=True)
+                    src_mask = (target == src_class)
+                    src_total += src_mask.sum().item()
+                    src_correct += (preds[src_mask] == src_class).sum().item()
+                    src_flipped_to_tgt += (preds[src_mask] == tgt_class).sum().item()
+
+                    tgt_pred_mask = (preds == tgt_class)
+                    tgt_pred_total += tgt_pred_mask.sum().item()
+                    tgt_true_positive += ((preds == tgt_class) & (target == tgt_class)).sum().item()
+
+            # --- TÍNH TOÁN KẾT QUẢ CUỐI CÙNG ---
+            acc = correct / total if total > 0 else 0.0
+            
+            # Tính F1-Score (Dùng macro cho môi trường phân loại đa lớp / imbalanced)
+            f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+            
+            # Tính AUC-ROC (Bắt lỗi ValueError nếu tập test cục bộ chỉ có 1 nhãn do Non-IID quá gắt)
+            try:
+                # Tìm số lượng class thực tế có trong tập dự đoán
+                num_unique_classes = len(np.unique(all_targets))
+                
+                if num_unique_classes > 2:
+                    # TRƯỜNG HỢP: CIFAR-10, MNIST, HAR (Multi-class)
+                    auc = roc_auc_score(all_targets, all_probs, multi_class='ovr', average='macro')
+                elif num_unique_classes == 2:
+                    # TRƯỜNG HỢP: Health Dataset (Binary Class 0 và 1)
+                    # Chú ý: Ở binary, hàm roc_auc_score chỉ nhận xác suất của class Positive (class 1)
+                    # Nên ta phải lấy cột index 1 của ma trận xác suất: [:, 1]
+                    all_probs_np = np.array(all_probs)
+                    if all_probs_np.shape[1] > 1: # Đảm bảo mảng probs có đủ 2 cột
+                        auc = roc_auc_score(all_targets, all_probs_np[:, 1])
+                    else:
+                        auc = 0.5
+                else:
+                    # TRƯỜNG HỢP CỰC ĐOAN: Test set chỉ có duy nhất 1 nhãn (Do Non-IID quá gắt)
+                    auc = 0.5 
+                    
+            except ValueError as e:
+                # print(f"Lỗi tính AUC: {e}") # Bỏ comment dòng này nếu muốn xem lỗi chi tiết
+                auc = 0.5
+
+            # print(src_correct, src_total, flush=True)
+            return {
+                "accuracy": acc,
+                "error_rate": 1.0 - acc,
+                "src_recall": src_correct / (src_total + 1e-9),
+                "asr": src_flipped_to_tgt / (src_total + 1e-9),
+                "tgt_precision": tgt_true_positive / (tgt_pred_total + 1e-9),
+                "f1": f1,
+                "auc": auc
+            }
+        finally:
+            self.model.load_state_dict(original_state)
+            self.model.to('cpu')
     
     def evaluate_privacy(self):
         """
@@ -697,17 +1082,50 @@ class WorkerNode:
             return self.attack_strategy.evaluate(self)
         
         return {}
+    # -----------------------------------------------------------------------------------
+    # def _add_trigger(self, images):
+    #     """
+    #     Hàm helper để gắn trigger lên ảnh test.
+    #     Logic này PHẢI KHỚP với logic tấn công (ví dụ: pattern 3x3 pixel góc phải).
+    #     """
+    #     # Giả sử trigger là một ô vuông trắng 3x3 ở góc dưới bên phải
+    #     # images shape: [Batch, Channel, Height, Width]
+    #     from app.utils.trigger import add_pixel_pattern
+    #     patch_images = images.clone()
+    #     return add_pixel_pattern(patch_images,self.device)
+    def _add_trigger(self, data):
+        """
+        Hàm helper để gắn trigger lên dữ liệu test.
+        Hỗ trợ cả Dữ liệu Ảnh (gọi hàm add_pixel_pattern) và Dữ liệu Bảng y tế.
+        """
+        patch_data = data.clone()
+        dims = len(patch_data.shape)
+        
+        # =======================================================
+        # TRƯỜNG HỢP 1: LÔ DỮ LIỆU BẢNG (Health Dataset) - [Batch, 36]
+        # =======================================================
+        if dims == 2:
+            # Cấy GLOBAL Trigger y hệt như logic ở TriggerGenerator
+            trigger_value = 10.0
+            
+            patch_data[:, 0] = trigger_value
+            patch_data[:, 1] = -trigger_value
+            patch_data[:, 2] = trigger_value
+            patch_data[:, 3] = -trigger_value
+            
+            return patch_data
 
-    def _add_trigger(self, images):
-        """
-        Hàm helper để gắn trigger lên ảnh test.
-        Logic này PHẢI KHỚP với logic tấn công (ví dụ: pattern 3x3 pixel góc phải).
-        """
-        # Giả sử trigger là một ô vuông trắng 3x3 ở góc dưới bên phải
-        # images shape: [Batch, Channel, Height, Width]
-        from app.utils.trigger import add_pixel_pattern
-        patch_images = images.clone()
-        return add_pixel_pattern(patch_images,self.device)
+        # =======================================================
+        # TRƯỜNG HỢP 2: LÔ DỮ LIỆU ẢNH (MNIST/CIFAR-10) - [Batch, C, H, W]
+        # =======================================================
+        elif dims == 4:
+            # Tái sử dụng lại hàm add_pixel_pattern cũ của bạn
+            from app.utils.trigger import add_pixel_pattern
+            return add_pixel_pattern(patch_data, self.device)
+            
+        # Các trường hợp khác (nếu có)
+        else:
+            return patch_data
     
     def set_neighbors(self, neighbor_indices):
         """
@@ -779,3 +1197,113 @@ class WorkerNode:
             "loss": avg_loss,
             "mse": avg_mse
         }
+    def evaluate_standard(self, test_loader):
+        """
+        Đánh giá hiệu năng chuẩn (Clean Metrics) cho kịch bản bình thường.
+        Chỉ tính toán Accuracy và Loss để tối ưu tốc độ.
+        """
+        # Kiểm tra NaN/Inf trước khi đo (đề phòng model nổ)
+        for param in self.model.parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"[Worker {self.id}] Model params are NaN/Inf! Returning Worst Metrics.")
+                return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
+
+        self.model.to(self.device)
+        self.model.eval()
+        test_loss = 0.0
+        correct = 0
+        total_samples = 0
+        try:
+            with torch.no_grad():
+                for data, target in test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    
+                    # Forward
+                    logits = self.model(data)
+                    
+                    # 1. Tính Accuracy
+                    pred = logits.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    
+                    # 2. Tính Loss (CrossEntropy)
+                    # Kỹ thuật chuẩn: Nhân loss của batch với số lượng sample trong batch đó
+                    loss = self.criterion(logits, target)
+                    test_loss += loss.item() * data.size(0) 
+                    
+                    total_samples += data.size(0)
+
+            # Tổng hợp kết quả
+            avg_loss = test_loss / total_samples if total_samples > 0 else 0.0
+            accuracy = correct / total_samples if total_samples > 0 else 0.0
+            
+            return {
+                "accuracy": accuracy,
+                "error_rate": 1.0 - accuracy,
+                "loss": avg_loss
+            }
+        finally:
+            self.model.to('cpu')
+    
+    # Tính accuracy và max.ter mới
+    def evaluate_k_models(self, k_models_dict):
+        """
+        Worker tự thử nghiệm k mô hình (từ Ủy ban) trên tập test cục bộ.
+        Trả về kết quả của mô hình có Loss thấp nhất (chuẩn IFCA).
+        """
+        # Nếu không có model nào hoặc worker không có tập test, trả về điểm liệt
+        # print(not k_models_dict, not hasattr(self, 'local_test_loader'), self.local_test_loader is None, flush=True)
+        if not k_models_dict or not hasattr(self, 'local_test_loader') or self.local_test_loader is None:
+            return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
+
+        best_loss = float('inf')
+        best_acc = 0.0
+        best_cid = None
+
+        # 1. BẢO HIỂM: Lưu lại trọng số gốc của Worker trước khi thử model mới
+        original_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+
+        self.model.to(self.device)
+        self.model.eval()
+
+        # 2. Bắt đầu đánh giá từng model trong k-models
+        with torch.no_grad():
+            for cid, model_state in k_models_dict.items():
+                # Load trọng số của model cụm (cid) vào
+                self.model.load_state_dict(model_state)
+                
+                client_loss = 0.0
+                correct = 0
+                total = 0
+
+                # Chạy suy luận trên tập Test cục bộ
+                for data, target in self.local_test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    outputs = self.model(data)
+                    
+                    loss = self.criterion(outputs, target)
+                    client_loss += loss.item() * data.size(0)
+                    
+                    pred = outputs.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    total += data.size(0)
+
+                # Tính trung bình Loss và Accuracy
+                avg_loss = client_loss / total if total > 0 else float('inf')
+                acc = correct / total if total > 0 else 0.0
+
+                # 3. CHỌN MÔ HÌNH TỐT NHẤT: Nếu loss thấp hơn best_loss thì cập nhật
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    best_acc = acc
+                    best_cid = cid
+
+        # 4. TRẢ LẠI HIỆN TRẠNG: Khôi phục trọng số gốc cho Worker
+        self.model.load_state_dict(original_state)
+        self.model.to('cpu')
+
+        return {
+            "accuracy": best_acc,
+            "error_rate": 1.0 - best_acc,
+            "loss": best_loss,
+            "best_cluster_id": best_cid
+        }    

@@ -43,7 +43,12 @@ class SimulationEngine:
             "reputation": [],
             "comm_traffic_mb": []
         }
-        
+        # Cấu hình dynamic threshold
+        self.previous_global_acc = 0.0  # Khởi tạo: Vòng đầu chưa có model thì Acc = 0
+        self.base_min_threshold = 0.1   # Ngưỡng tối thiểu tuyệt đối (10% - bằng đoán mò)
+        self.tolerance = 0.15           # Biên độ khoan dung (15%). VD: Nếu Global Acc là 60%, node đạt 45% vẫn được qua.
+        self.currrent_dynamic_threshold = Config.ACC_THRESHOLD
+
     
     def _init_state(self):
         """
@@ -62,6 +67,7 @@ class SimulationEngine:
         # Các biến khác
         self.test_loader = None
         self.blockchain = None
+
     
     def reset_system(self):
         """
@@ -103,7 +109,7 @@ class SimulationEngine:
 
         # Nếu là BASELINE, cần thiết lập Topology tĩnh ngay từ đầu (VD: Random Graph)
         if self.system_mode == 'BASELINE':
-            self._setup_static_topology(num_workers)
+            self._setup_static_topology(num_workers, connectivity=0.1)
         else:
             # Chạy bầu cử lần đầu
             # Khởi tạo blockchain            
@@ -142,8 +148,8 @@ class SimulationEngine:
     def run_round(self, round_id, req_data):
         # self._setup_scenario(req_data)
         scenario_id = str(req_data.get('scenario', '1'))
-        current_scenario = ScenarioExperiment4(self.workers,req_data)
-        current_scenario.setup_security(self.workers)
+        # current_scenario = ScenarioExperiment4(self.workers,req_data)
+        # current_scenario.setup_security(self.workers)
 
         # 2. Khởi tạo và Cấu hình Scenario
         if scenario_id == '1':
@@ -151,7 +157,7 @@ class SimulationEngine:
             
             # QUAN TRỌNG: Chỉ chia lại dữ liệu (Dirichlet) ở vòng 0 hoặc khi có cờ reset
             # Nếu chạy mỗi vòng sẽ làm mất tính ổn định của Local Training
-            should_reset_data = req_data.get('reset', False) or (round_id == 0)
+            should_reset_data = req_data.get('reset', False)
             
             if should_reset_data:
                 dataset_name = req_data.get('dataset', 'mnist')
@@ -166,8 +172,15 @@ class SimulationEngine:
             for node in self.workers:
                 if node.is_malicious: cnt_mal += 1
             self.blocked_nodes = set()
+            # QUAN TRỌNG: Chỉ chia lại dữ liệu (Dirichlet) ở vòng 0 hoặc khi có cờ reset
+            # Nếu chạy mỗi vòng sẽ làm mất tính ổn định của Local Training
+            should_reset_data = req_data.get('reset', False)
+            
             current_scenario = ScenarioExperiment4(self.workers, req_data)
             # Scenario 4 tập trung vào tấn công, cần setup mỗi vòng (hoặc tùy logic tấn công động)
+            if should_reset_data:
+                dataset_name = req_data.get('dataset', 'mnist')
+                current_scenario.setup_data(self.workers, dataset_name)
             current_scenario.setup_security(self.workers)
 
             attack_config = {
@@ -190,12 +203,19 @@ class SimulationEngine:
             execution_result = self._run_round_baseline(round_id)
         else:
             execution_result = self._run_round_proposed(round_id)
+            current_round_cluster_models = execution_result['current_round_k_models']
 
-        security_metrics = self._calculate_advanced_metrics(attack_config)
+        security_metrics = self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models) if self.system_mode != 'BASELINE' else self._calculate_advanced_metrics(attack_config, current_round_cluster_models=None)
         # print("Exe result", execution_result.keys(), flush=True)
+        # Cập nhật previous global acc cho vòng kế tiếp
+        self.previous_global_acc = security_metrics['avg_acc']
+        print("PRev accuracy", self.previous_global_acc, flush=True)
 
+        # Chỉ trả những kết quả không phải current_round_k_models
+        filtered_result = execution_result.copy()
+        filtered_result.pop("current_round_k_models", None)
         final_result = {
-            **execution_result,  # Bung toàn bộ kết quả vận hành (Logs, Topology...)
+            **filtered_result,  # Bung toàn bộ kết quả vận hành (Logs, Topology...)
             **security_metrics,  # Bung toàn bộ chỉ số bảo mật (ASR, TER...),
             "algo_name": req_data.get('aggregation_algorithm', "Proposed"),
             "round": round_id,
@@ -205,8 +225,10 @@ class SimulationEngine:
 
     def _run_round_baseline(self, round_id):
         # Pha 1: Training & Attack (Tự động kích hoạt Attack nếu Scenario đã setup)
+        start_time = time.time()
         algo_name = self.engine_config.get('aggregation_algorithm', None)
-        print(self.engine_config, "WTF", flush=True)
+
+        t0 = time.time()
         is_coco = True if algo_name and algo_name == "CoCo" else False
         if is_coco:
             n = len(self.workers)
@@ -218,10 +240,12 @@ class SimulationEngine:
             }
             np.fill_diagonal(self.coco_state['A'], 0)
         print("   [Phase 1] Local Training...")
-        for w in self.workers:            
+        
+        for w in self.workers:
             w.train()
 
         # Pha 2: Gossip (Truyền tin)
+        t1 = time.time()
         print("   [Phase 2] Gossiping...")
         if is_coco:
             self.coco_state, improved, t_opt = CoCo.optimize_network(self.workers, self.coco_state)
@@ -251,24 +275,35 @@ class SimulationEngine:
         print(f"   -> Total Gossips Sent: {count_gossips}")
         if is_coco: print(f"   -> Estimated Latency: {round_max_latency:.4f}s")
         # Pha 3: Aggregation
+        t2 = time.time()
         print("   [Phase 3] Aggregation...")
-        accuracies = []
         
         for w in self.workers:
-            w.aggregate(current_round_id=round_id) # Gọi hàm aggregate của StandardDFLNode
-            # Đánh giá nhanh (Optional)
-            # acc = w.evaluate(self.test_loader)
-            # accuracies.append(acc)
+            w.aggregate(current_round_id=round_id) # Gọi hàm aggregate của StandardDFLNode            
             
-        # avg_acc = sum(accuracies) / len(accuracies)
-        # print(f"[BASELINE] Round {round_id} finished. Avg Acc: {avg_acc:.4f}")
+        t3 = time.time()
+        execution_time = t3 - start_time
+        # Phân rã thời gian (Latency Breakdown)
+        latency_breakdown = {
+            "time_election": 0.0,         # 0.0
+            "time_clustering": 0.0,     # 0.0
+            "time_training": t1 - t0,         # Thực tế
+            "time_gossip": t2 - t1,          # Thực tế
+            "time_aggregation": t3 - t2,   # Thực tế
+            "time_consensus": 0.0        # 0.0
+        }
+        # Thêm mảng log thời gian nếu chưa có
+        if "latency_breakdown" not in self.logs:
+            self.logs["latency_breakdown"] = []
+        self.logs["latency_breakdown"].append(latency_breakdown)
         return {
             "status": "aggregated",
             "topology": "Dynamic (CoCo)" if is_coco else "Fixed",
             "latency": round_max_latency if is_coco else 0,
             "avg_compression": np.mean(self.coco_state['r']) if is_coco else 1.0,
             "comm_traffic_mb": total_traffic,
-            "hello": "WTF"
+            "execution_time": execution_time,
+            "latency_breakdown": self.logs["latency_breakdown"]
         }
     
     def _run_round_proposed(self, round_id):
@@ -278,6 +313,7 @@ class SimulationEngine:
         start_time = time.time()
         # 2. EXECUTE 5 PHASES
         # ----------------------------------------------------------------------
+        t0 = time.time()
         proposer, committee, active_workers = self._elect_committee(round_id)
         # Proposer sẽ chịu trách nhiệm tạo block ở Phase Consensus
         self.current_proposer = proposer
@@ -290,6 +326,7 @@ class SimulationEngine:
             "committee": [node.id for node in self.current_committee]
         }
         # Phase 1: Clustering
+        t1 = time.time()
         clusters = self._phase_clustering(workers_pools=active_workers,round_id=round_id)
         self.cluster_heads = []
         for members in clusters.values():
@@ -301,31 +338,44 @@ class SimulationEngine:
         for cid, members in clusters.items():
             cluster_map[cid] = [w.id for w in members]
         # Phase 2: Training & LDP
+        t2 = time.time()
         worker_updates_cache, global_train_loss = self._phase_training_ldp(clusters)
 
         # Phase 3: CoCo Optimization
+        t3 = time.time()
         instruction_maps, all_topologies = self._phase_coco_optimization(clusters, worker_updates_cache)
 
         # Phase 4: Gossip & Aggregation
+        t4 =  time.time()
         round_results, real_accuracies, total_traffic = self._phase_aggregation(clusters=clusters, instruction_maps=instruction_maps, worker_updates_cache=worker_updates_cache, round_id=round_id)
 
         # Phase 5: Consensus
+        t5 = time.time()
+        self.currrent_dynamic_threshold = max(self.base_min_threshold, self.previous_global_acc - self.tolerance) if Config.ENABLE_DYNAMIC else self.currrent_dynamic_threshold # Tính ngưỡng động cho committee
         consensus_results, consensus_log = self._phase_consensus(round_results)
+
         current_round_cluster_models = {}
+        current_hashes_on_chain = self.blockchain.get_latest_k_model_hashes()
         for res in consensus_results:
-            if res.get('status') == 'ACCEPTED':
-                cid = res['cluster_id']
+            cid = res['cluster_id']
+            if res.get('status') == 'ACCEPTED':                
                 model_state = res['model_state_dict'] # Model sau khi tái tạo
                 current_round_cluster_models[cid] = model_state
+            else:
+                if cid in current_hashes_on_chain:                    
+                    old_hash = current_hashes_on_chain[cid]
+                    old_model_state = self.storage.download_model(old_hash)
+                    if old_model_state:
+                        current_round_cluster_models[cid] = old_model_state
         consensus_dist = self._calculate_consensus_distance(self.workers, current_round_cluster_models)
+
         # Phase 5.1: Lưu cid mới và update k-models cho vòng sau
         self._finalize_round_and_prepare_next(consensus_results)
-
+        t6 = time.time()
         # 3. FINALIZE & RETURN METRICS
         # ----------------------------------------------------------------------
-        execution_time = time.time() - start_time
-        avg_accuracy = sum(real_accuracies) / len(real_accuracies) if real_accuracies else 0
-        self._update_node_scores() # Cập nhật điểm số sau mỗi vòng
+        execution_time = t6 - start_time
+        
         print(f"Round {round_id} finished inside Engine in {execution_time:.2f}s")
 
         self.logs["rounds"].append(round_id)
@@ -333,6 +383,21 @@ class SimulationEngine:
         self.logs["cluster_assignments"].append(cluster_map)
         self.logs["reputation"].append(self.blockchain.reputation_scores.copy())
         self.logs["comm_traffic_mb"].append(total_traffic)
+
+        # Phân rã thời gian (Latency Breakdown)
+        latency_breakdown = {
+            "time_election": t1 - t0,
+            "time_clustering": t2 - t1,
+            "time_training": t3 - t2,
+            "time_gossip": t4 - t3,
+            "time_aggregation": t5 - t4,
+            "time_consensus": t6 - t5
+        }
+        # Thêm mảng log thời gian nếu chưa có
+        if "latency_breakdown" not in self.logs:
+            self.logs["latency_breakdown"] = []
+        self.logs["latency_breakdown"].append(latency_breakdown)
+        
         return {
             "execution_time": execution_time,
             "global_loss": global_train_loss,
@@ -342,29 +407,9 @@ class SimulationEngine:
             **self.logs,
             "logs": consensus_log,
             # "scenario": f"Scenario {scenario_id}",
-            "reputation": self.blockchain.reputation_scores
+            "reputation": self.blockchain.reputation_scores,
+            "current_round_k_models": current_round_cluster_models
         }
-
-    def _update_node_scores(self):
-        all_ids = set(self.blockchain.reputation_scores.keys()) \
-              | set(self.blockchain.reward.keys()) \
-              | set(self.blockchain.fault.keys())
-
-        for nid in all_ids:
-
-            old_rep = self.blockchain.reputation_scores.get(nid, Config.INITIAL_REPUTATION)
-            reward = self.blockchain.reward.get(nid, 0)
-            fault = self.blockchain.fault.get(nid, 0)
-
-            new_rep = old_rep + reward - Config.PENALTY * fault
-
-            self.blockchain.reputation_scores[nid] = new_rep
-            print(f"Node {nid}: rep {old_rep:.2f} → {new_rep:.2f}")
-
-        # reset reward/fault cho round tiếp theo
-        self.blockchain.reward = {nid: 0 for nid in all_ids}
-        self.blockchain.fault = {nid: 0 for nid in all_ids}
-
 
     # --- CÁC PHƯƠNG THỨC NỘI BỘ (PRIVATE METHODS) CHO TỪNG PHA ---
     def _initialize_global_k_models(self):
@@ -585,9 +630,8 @@ class SimulationEngine:
             # Giả lập validate accuracy
             # simulated_acc = min(95.0, 15.0 + round_id * 2.5 + random.uniform(-2, 3))
             accuracies.append(0.0)
-
             members = clusters[ch.cluster_id]
-            results.append({"cluster_id": ch.cluster_id, "cluster_head_id": ch.id, "cluster_members": [m.id for m in members], "rejected_workers": rejected_workers,  **aggregate_res})
+            results.append({"cluster_id": ch.cluster_id, **aggregate_res, "cluster_head_id": ch.id, "cluster_members": [m.id for m in members]})
             
         return results, accuracies, total_traffic
 
@@ -775,8 +819,9 @@ class SimulationEngine:
         """
         votes = {}
         scores = {}
+        print(f"Current Dynamic threshold {self.currrent_dynamic_threshold}",flush=True)
         for validator in committee:
-            acc,vote = validator.validate_update(model_state, val_loader)
+            acc,vote = validator.validate_update(model_state, val_loader, self.currrent_dynamic_threshold)
             votes[validator.id] = vote
             scores[validator.id] = acc
             print(f" -> Validator {validator.id}: Acc={acc:.4f} | Vote={vote}")
@@ -824,7 +869,7 @@ class SimulationEngine:
             "benign_max_mse": max_mse
         }
     
-    def _calculate_advanced_metrics(self, attack_config):
+    def _calculate_advanced_metrics(self, attack_config, current_round_cluster_models=None):
         """
         Hàm chính: Điều phối việc tính toán dựa trên loại tấn công.
         """
@@ -848,26 +893,36 @@ class SimulationEngine:
             return sum(clean_vals) / len(clean_vals) if clean_vals else default
 
         if attack_type == 'LABEL_FLIPPING':
-            src = attack_config.get('source_class')
-            tgt = attack_config.get('target_class')
+            src = int(attack_config.get('source_class'))
+            tgt = int(attack_config.get('target_class'))
+            if src is None or tgt is None:
+                print("[Lỗi] Kịch bản Label Flipping bị thiếu 'source_class' hoặc 'target_class' trong Config!")
+                return self.specific_metrics # Thoát an toàn
             
             # Container tạm
-            asrs, src_recalls, tgt_precisions = [], [], []
+            asrs, src_recalls, tgt_precisions, f1s, aucs = [], [], [], [], []
             
             for w in benign_workers:
-                m = w.evaluate_label_flipping(self.test_loader, src, tgt)
-                
+                if self.system_mode == "PROPOSED":
+                    # m = w.evaluate_label_flipping(self.test_loader, src, tgt)
+                    m = w.evaluate_label_flipping(src, tgt, current_round_cluster_models, self.test_loader)
+                else:
+                    m = w.evaluate_label_flipping(src, tgt, None, self.test_loader)
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
                 asrs.append(m['asr'])
                 src_recalls.append(m['src_recall'])
                 tgt_precisions.append(m['tgt_precision'])
+                f1s.append(m['f1'])
+                aucs.append(m['auc'])
             
             # Tổng hợp
             self.specific_metrics = {
                 "asr": sum(asrs) / len(asrs),
                 "src_recall": sum(src_recalls) / len(src_recalls),
-                "tgt_precision": sum(tgt_precisions) / len(tgt_precisions)
+                "tgt_precision": sum(tgt_precisions) / len(tgt_precisions),
+                "f1": safe_mean(f1s),
+                "auc": safe_mean(aucs)
             }
 
         elif attack_type in ['GAUSSIAN_MODEL_POISONING', 'MODEL_POISONING']:
@@ -876,7 +931,10 @@ class SimulationEngine:
             losses = []
             
             for w in benign_workers:
-                m = w.evaluate_gaussian_metrics(self.test_loader)
+                if self.system_mode == "PROPOSED":
+                    m = w.evaluate_gaussian_metrics(current_round_cluster_models)
+                else:
+                    m = w.evaluate_gaussian_metrics()
                 
                 accuracies.append(m['accuracy'])
                 error_rates.append(m['error_rate'])
@@ -896,10 +954,12 @@ class SimulationEngine:
             asrs = []
             
             print(f"   Using Target Class {tgt} for Backdoor Eval")
-
             for w in benign_workers:
                 # Gọi hàm
-                m = w.evaluate_backdoor(self.test_loader, target_class=tgt)
+                if self.system_mode == "PROPOSED":
+                    m = w.evaluate_backdoor(tgt, current_round_cluster_models)
+                else:
+                    m = w.evaluate_backdoor(tgt)
 
                 # Sanitize từng metric đơn lẻ trước khi append
                 acc = m.get('accuracy', 0.0)
@@ -945,12 +1005,46 @@ class SimulationEngine:
                 print(f"   [GIA Report] Avg MSE: {self.specific_metrics.get('recon_mse', 0):.4f}, "
                       f"PSNR: {self.specific_metrics.get('recon_psnr', 0):.2f} dB")
         else:
+            # # Fallback cho trường hợp chạy bình thường (NONE)
+            # is_attack = False
+            # losses = []
+            # for w in benign_workers:
+            #     m = w.evaluate_standard(self.test_loader) # Dùng hàm cơ bản
+            #     accuracies.append(m['accuracy'])
+            #     error_rates.append(m['error_rate'])
+            #     losses.append(m['loss'])
+            # self.specific_metrics = {
+            #     "avg_loss": safe_mean(losses, default=10000.0)
+            # }
             # Fallback cho trường hợp chạy bình thường (NONE)
             is_attack = False
-            for w in benign_workers:
-                m = w.evaluate_gaussian_metrics(self.test_loader) # Dùng hàm cơ bản
-                accuracies.append(m['accuracy'])
-                error_rates.append(m['error_rate'])
+            losses = []
+            accuracies = []
+            error_rates = []
+
+            # KIỂM TRA: Đang chạy Proposed (có k-models) hay Baseline?
+            if current_round_cluster_models is not None:
+                # --- LUỒNG PROPOSED (Đánh giá trên K-Models) ---
+                print("   [Metrics] Evaluating Personalized Accuracy on K-Models...")
+                for w in benign_workers:
+                    m = w.evaluate_k_models(current_round_cluster_models)
+                    accuracies.append(m['accuracy'])
+                    error_rates.append(m['error_rate'])
+                    losses.append(m['loss'])
+            else:
+                # --- LUỒNG BASELINE (Đánh giá trên Model Cục bộ) ---
+                print("   [Metrics] Evaluating Local Models (Baseline)...")
+                for w in benign_workers:
+                    # Gọi evaluate_standard không truyền test_loader, 
+                    # nó sẽ tự dùng w.local_test_loader như ta đã sửa ở phiên trước
+                    m = w.evaluate_standard() 
+                    accuracies.append(m['accuracy'])
+                    error_rates.append(m['error_rate'])
+                    losses.append(m['loss'])
+
+            self.specific_metrics = {
+                "avg_loss": safe_mean(losses, default=10000.0)
+            }
 
         # 2. Tính các Metrics chung (Common Metrics)
         self.common_metrics = self._calculate_common_metrics(benign_workers, error_rates, accuracies, is_attack=is_attack)
@@ -1039,20 +1133,57 @@ class SimulationEngine:
         total_mal_updates = 0 # Tổng số lần kẻ xấu gửi updates
         total_benign_updates = 0 # Tổng số ng tốt gửi update
 
-        for ch in self.cluster_heads:
-            if not hasattr(ch, 'blocked_ids_this_round'): continue
+        # for ch in self.cluster_heads:
+        #     if not hasattr(ch, 'blocked_ids_this_round'): continue
 
-            blocked_set = ch.blocked_ids_this_round
-            member_ids = set(ch.members)
+        #     blocked_set = ch.blocked_ids_this_round
+        #     member_ids = set(ch.members)
 
-            local_malicious = member_ids.intersection(actual_malicious)
-            local_benign = member_ids.intersection(actual_benign)
+        #     local_malicious = member_ids.intersection(actual_malicious)
+        #     local_benign = member_ids.intersection(actual_benign)
 
-            total_benign_updates += len(local_benign)
-            total_mal_updates += len(local_malicious)
+        #     total_benign_updates += len(local_benign)
+        #     total_mal_updates += len(local_malicious)
 
-            total_blocked_benign += len(blocked_set.intersection(actual_benign))
-            total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+        #     total_blocked_benign += len(blocked_set.intersection(actual_benign))
+        #     total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+        # ==========================================
+        # TRƯỜNG HỢP 1: KỊCH BẢN PROPOSED (Có Cluster Heads)
+        # ==========================================
+        if hasattr(self, 'cluster_heads') and self.cluster_heads:
+            for ch in self.cluster_heads:
+                # Nếu CH chưa có danh sách chặn, bỏ qua
+                if not hasattr(ch, 'blocked_ids_this_round'): continue
+
+                blocked_set = set(ch.blocked_ids_this_round)
+                member_ids = set(ch.members)
+
+                local_malicious = member_ids.intersection(actual_malicious)
+                local_benign = member_ids.intersection(actual_benign)
+
+                total_benign_updates += len(local_benign)
+                total_mal_updates += len(local_malicious)
+
+                total_blocked_benign += len(blocked_set.intersection(actual_benign))
+                total_blocked_mal += len(blocked_set.intersection(actual_malicious))
+
+        # ==========================================
+        # TRƯỜNG HỢP 2: KỊCH BẢN BASELINE (StandardDFL)
+        # ==========================================
+        else:
+            # Trong Baseline, mỗi worker gửi 1 update lên Global/Neighbors
+            total_mal_updates = len(actual_malicious)
+            total_benign_updates = len(actual_benign)
+
+            # Lấy danh sách bị chặn toàn cục (Nếu thuật toán aggregate có ghi nhận)
+            # FedAvg sẽ không có biến này -> blocked_set rỗng -> TPR = 0, FPR = 0 (Hợp lý vì FedAvg không chặn ai)
+            if hasattr(self, 'blocked_ids_this_round'):
+                blocked_set = set(self.blocked_ids_this_round)
+            else:
+                blocked_set = set()
+
+            total_blocked_mal = len(blocked_set.intersection(actual_malicious))
+            total_blocked_benign = len(blocked_set.intersection(actual_benign))
 
         # TPR = TP / (TP + FN) -> Tỷ lệ node xấu bị bắt
         tpr = total_blocked_mal / total_mal_updates if total_mal_updates > 0 else 0.0
@@ -1261,7 +1392,9 @@ class SimulationEngine:
             # Tính lại Norm sau khi sửa
             rec_norm = compute_model_norm({k: v.cpu().float() for k, v in reconstructed_model.items()})
             print(f" -> Fixed Norm: {rec_norm:.4f}")
-        if abs(proposed_norm - rec_norm) > 1e-3:
+        tolerance = max(1e-2, 0.001 * proposed_norm) # Cho phép lệch 0.1% hoặc 0.01
+    
+        if abs(proposed_norm - rec_norm) > tolerance:
             print(f" -> REJECTED: Norm mismatch too high even after fix attempt.")
             return f"Cluster {cluster_id}: Rejected (Integrity Check Failed)"
         # Committee validation
@@ -1290,18 +1423,11 @@ class SimulationEngine:
             is_good_update=is_approved
         )
 
-        if not is_approved:
-            return f"Cluster {cluster_id}: Rejected by Vote ({approved_votes}/{total_votes})"
+        # if not is_approved:
+        #     return f"Cluster {cluster_id}: Rejected by Vote ({approved_votes}/{total_votes})"
 
         # Bước 5: Tạo BLOCK mới
-        storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
-
-        block_data = {
-            "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
-            "model_hash": res['model_hash'],
-            "storage_uri": storage_path,
-            "votes": votes,
-        }
+        storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash']) if is_approved else None
         
         # new_block = self.blockchain.add_block(
         #     block_data
@@ -1309,7 +1435,7 @@ class SimulationEngine:
         
         # return f"Cluster {cluster_id}: Accepted (Block {new_block.index})"
         return {
-            "status": "ACCEPTED",
+            "status": "ACCEPTED" if is_approved else "REJECTED",
             "cluster_id": cluster_id,
             "data": {
                 "accuracy": final_acc,
@@ -1409,3 +1535,69 @@ class SimulationEngine:
             # print(" -> Metrics saved to disk.")
         except Exception as e:
             print(f"Error saving metrics: {e}")
+
+    def _evaluate_personalized_k_models(self, current_round_cluster_models):
+        """
+        Đánh giá Personalized Accuracy trên tập k-models đã được Ủy ban thông qua.
+        Mỗi worker sẽ thử toàn bộ k-models trên local_test_loader của mình,
+        chọn model có Loss thấp nhất để làm đại diện.
+        """
+        if not current_round_cluster_models:
+            return 0.0, 1.0 # avg_acc = 0.0, max_ter = 1.0
+
+        # Khởi tạo model vỏ rỗng để mượn đường chạy test (chạy trên GPU nếu có)
+        eval_model = get_model(self.config.get('model', 'simple_cnn'), num_classes=self.num_classes).to(self.device)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        all_workers_best_acc = []
+        all_workers_best_err = []
+
+        # Tắt gradient để tính toán siêu tốc
+        with torch.no_grad():
+            for w in self.workers:
+                # Bỏ qua nếu worker không có tập test cục bộ
+                if getattr(w, 'local_test_loader', None) is None:
+                    continue
+                    
+                best_loss = float('inf')
+                best_acc = 0.0
+                
+                # Worker "thử áo": Mặc thử từng model trong danh sách k-models
+                for cid, model_state in current_round_cluster_models.items():
+                    eval_model.load_state_dict(model_state)
+                    eval_model.eval()
+                    
+                    client_loss = 0.0
+                    correct = 0
+                    total = 0
+                    
+                    # Chạy suy luận trên tập Test cục bộ (đã chia Dirichlet đồng bộ)
+                    for data, target in w.local_test_loader:
+                        data, target = data.to(self.device), target.to(self.device)
+                        outputs = eval_model(data)
+                        
+                        loss = criterion(outputs, target)
+                        client_loss += loss.item() * data.size(0)
+                        
+                        pred = outputs.argmax(dim=1, keepdim=True)
+                        correct += pred.eq(target.view_as(pred)).sum().item()
+                        total += data.size(0)
+                        
+                    # Tính trung bình Loss và Accuracy cho model này
+                    avg_loss = client_loss / total if total > 0 else float('inf')
+                    acc = correct / total if total > 0 else 0.0
+                    
+                    # IFCA Standard: Chọn model có hàm Loss NHỎ NHẤT làm đại diện
+                    if avg_loss < best_loss:
+                        best_loss = avg_loss
+                        best_acc = acc
+                
+                # Lưu lại kết quả của cho worker này
+                all_workers_best_acc.append(best_acc)
+                all_workers_best_err.append(1.0 - best_acc)
+
+        # Tổng hợp thành metric của toàn mạng (Global System Metrics)
+        avg_personalized_acc = sum(all_workers_best_acc) / len(all_workers_best_acc) if all_workers_best_acc else 0.0
+        max_ter = max(all_workers_best_err) if all_workers_best_err else 1.0
+
+        return avg_personalized_acc, max_ter

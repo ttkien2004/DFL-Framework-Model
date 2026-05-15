@@ -128,7 +128,10 @@
 											</div>
 											<div class="col-md-6 d-none" id="baselineAlgorithmGroup">
 												<label class="form-label"> Baseline Algorithm </label>
-												<select class="form-select" name="baseline_algorithm">
+												<select
+													class="form-select"
+													name="aggregation_algorithm"
+												>
 													<option value="FED_AVG">FedAvg (Cơ bản)</option>
 													<option value="CoCo">
 														CoCo (Compression Consensus - Baseline)
@@ -149,6 +152,7 @@
 													</option>
 													<option value="fashion_mnist">Fashion MNIST</option>
 													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
 												</select>
 											</div>
 											<div class="col-md-6">
@@ -163,6 +167,9 @@
 													<option value="resnet18">
 														ResNet-18 (Cho CIFAR)
 													</option>
+													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
 												</select>
 											</div>
 										</div>
@@ -349,7 +356,24 @@
 												</select>
 											</div>
 										</div>
-
+										<div class="mb-4">
+											<label for="num_classes" class="form-label fw-bold">
+												<i class="bi bi-tags-fill text-info me-2"></i>Số lượng
+												Nhãn (Num Classes)
+											</label>
+											<input
+												type="number"
+												class="form-control"
+												id="num_classes"
+												value="10"
+												min="2"
+												max="1000"
+											/>
+											<div class="form-text">
+												Cấu hình số lượng nhãn của Dataset (Ví dụ:
+												MNIST/CIFAR-10 = 10, Health Dataset = 2, Kather = 8).
+											</div>
+										</div>
 										<div class="row mb-3">
 											<div class="col-md-6">
 												<label class="form-label text-danger fw-bold"
@@ -373,6 +397,7 @@
 													Ví dụ: 0.3 nghĩa là 30% workers là kẻ tấn công.
 												</div>
 											</div>
+
 											<div class="col-md-6">
 												<label class="form-label fw-bold"
 													>Loại Tấn công (Attack Type)</label
@@ -457,7 +482,7 @@
 															<input
 																type="number"
 																class="form-control"
-																name="target_class_flip"
+																name="target_class"
 																value="5"
 																min="0"
 																max="9"
@@ -592,6 +617,7 @@
 												<select class="form-select" name="dataset">
 													<option value="mnist" selected>MNIST</option>
 													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
 												</select>
 											</div>
 											<div class="col-md-4">
@@ -601,6 +627,9 @@
 														Simple CNN
 													</option>
 													<option value="resnet18">ResNet-18</option>
+													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
 												</select>
 											</div>
 											<div class="col-md-4">
@@ -762,57 +791,110 @@
 						non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
 						batch_size: parseInt(formData.get("batch_size")),
 						learning_rate: parseFloat(formData.get("learning_rate")),
+						target_rounds: targetRounds,
+						reset: initialReset,
+						num_classes: 2,
 					};
 
+					if (basePayload.system_mode === "BASELINE") {
+						basePayload.aggregation_algorithm = formData.get(
+							"aggregation_algorithm",
+						);
+					}
 					console.log(`Bắt đầu chạy ${targetRounds} vòng...`);
 
+					// try {
+					// 	// --- VÒNG LẶP GỬI REQUEST ---
+					// 	for (let i = 0; i < targetRounds; i++) {
+					// 		// Cập nhật giao diện loading
+					// 		loadingText.innerText = `Đang chạy vòng ${i + 1} / ${targetRounds}...`;
+
+					// 		// Logic quan trọng:
+					// 		// - Vòng đầu tiên (i=0): Dùng giá trị reset của người dùng (để xóa cũ nếu cần).
+					// 		// - Các vòng sau (i>0): Bắt buộc reset = false (để nối tiếp lịch sử, không xóa cái vừa train).
+					// 		const currentPayload = {
+					// 			...basePayload,
+					// 			reset: i === 0 ? initialReset : false,
+					// 		};
+
+					// 		// Gửi request
+					// 		const response = await fetch("/run_round", {
+					// 			method: "POST",
+					// 			headers: { "Content-Type": "application/json" },
+					// 			body: JSON.stringify(currentPayload),
+					// 		});
+
+					// 		const result = await response.json();
+
+					// 		if (result.status !== "success") {
+					// 			throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+					// 		}
+
+					// 		console.log(`Hoàn thành vòng ${i + 1}`);
+					// 	}
+
+					// 	// 3. Sau khi chạy đủ số vòng thì mới chuyển trang
+					// 	const numNodes = basePayload.num_workers;
+					// 	const roundsInputId =
+					// 		this.id === "baselineForm"
+					// 			? "targetRounds"
+					// 			: "targetRoundsAttack";
+					// 	const numRounds = document.getElementById(roundsInputId).value;
+
+					// 	const queryParams = new URLSearchParams({
+					// 		nodes: numNodes,
+					// 		rounds: numRounds,
+					// 		// Các thông tin khác như 'algo', 'attack' ta sẽ lấy trực tiếp từ dữ liệu trả về (globalHistory) để chính xác hơn
+					// 	});
+					// 	window.location.href = `/dashboard?${queryParams.toString()}`;
+					// } catch (error) {
+					// 	console.error("Error:", error);
+					// 	alert("Có lỗi xảy ra: " + error.message);
+					// 	loadingOverlay.classList.add("d-none");
+					// }
 					try {
-						// --- VÒNG LẶP GỬI REQUEST ---
-						for (let i = 0; i < targetRounds; i++) {
-							// Cập nhật giao diện loading
-							loadingText.innerText = `Đang chạy vòng ${i + 1} / ${targetRounds}...`;
-
-							// Logic quan trọng:
-							// - Vòng đầu tiên (i=0): Dùng giá trị reset của người dùng (để xóa cũ nếu cần).
-							// - Các vòng sau (i>0): Bắt buộc reset = false (để nối tiếp lịch sử, không xóa cái vừa train).
-							const currentPayload = {
-								...basePayload,
-								reset: i === 0 ? initialReset : false,
-							};
-
-							// Gửi request
-							const response = await fetch("/run_round", {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify(currentPayload),
-							});
-
-							const result = await response.json();
-
-							if (result.status !== "success") {
-								throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
-							}
-
-							console.log(`Hoàn thành vòng ${i + 1}`);
-						}
-
-						// 3. Sau khi chạy đủ số vòng thì mới chuyển trang
-						const numNodes = basePayload.num_workers;
-						const roundsInputId =
-							this.id === "baselineForm"
-								? "targetRounds"
-								: "targetRoundsAttack";
-						const numRounds = document.getElementById(roundsInputId).value;
-
-						const queryParams = new URLSearchParams({
-							nodes: numNodes,
-							rounds: numRounds,
-							// Các thông tin khác như 'algo', 'attack' ta sẽ lấy trực tiếp từ dữ liệu trả về (globalHistory) để chính xác hơn
+						// 3. Gửi lệnh Start Training
+						const response = await fetch("/start_training", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(basePayload),
 						});
-						window.location.href = `/dashboard?${queryParams.toString()}`;
+
+						const data = await response.json();
+						if (data.status !== "started") throw new Error(data.message);
+
+						// 4. Polling trạng thái (Hỏi server xem chạy xong chưa)
+						const checkStatus = setInterval(async () => {
+							try {
+								const res = await fetch("/training_status");
+								const status = await res.json();
+
+								loadingText.innerText = `Server đang xử lý: ${status.message} (${status.current_round}/${targetRounds})`;
+
+								if (!status.is_running && status.message === "Completed") {
+									clearInterval(checkStatus);
+									console.log("Training hoàn tất!");
+
+									// Chuyển trang dashboard kèm params để hiển thị đúng
+									const queryParams = new URLSearchParams({
+										nodes: basePayload.num_workers,
+										rounds: targetRounds,
+										non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+									});
+									window.location.href = `/dashboard?${queryParams.toString()}`;
+								} else if (
+									!status.is_running &&
+									status.message.startsWith("Error")
+								) {
+									clearInterval(checkStatus);
+									throw new Error(status.message);
+								}
+							} catch (err) {
+								console.error("Polling error:", err);
+							}
+						}, 1000); // Hỏi mỗi 1 giây
 					} catch (error) {
-						console.error("Error:", error);
-						alert("Có lỗi xảy ra: " + error.message);
+						alert("Lỗi: " + error.message);
 						loadingOverlay.classList.add("d-none");
 					}
 				});
@@ -848,6 +930,117 @@
 			});
 
 			// 3. Xử lý Submit Attack Form
+			// document
+			// 	.getElementById("attackForm")
+			// 	.addEventListener("submit", async function (e) {
+			// 		e.preventDefault();
+
+			// 		// 1. Setup Loading UI
+			// 		const loadingOverlay = document.getElementById("loadingOverlay");
+			// 		const loadingText = loadingOverlay.querySelector("h4");
+			// 		loadingOverlay.classList.remove("d-none");
+
+			// 		const formData = new FormData(this);
+			// 		const attackType = formData.get("attack_type");
+
+			// 		// Lấy số vòng lặp mục tiêu và trạng thái reset ban đầu
+			// 		const targetRounds =
+			// 			parseInt(document.getElementById("targetRoundsAttack").value) || 1;
+			// 		const initialReset =
+			// 			document.getElementById("resetSwitchAttack").checked;
+
+			// 		// Tạo Base Payload (Các tham số cố định)
+			// 		const basePayload = {
+			// 			scenario: "4", // Hoặc "2" tùy logic backend của bạn
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+			// 			attack_type: attackType,
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+
+			// 		// Thêm params riêng cho BASELINE
+			// 		if (basePayload.system_mode === "BASELINE") {
+			// 			basePayload.aggregation_algorithm = formData.get(
+			// 				"aggregation_algorithm",
+			// 			);
+			// 		}
+
+			// 		// Thêm params riêng cho từng loại Tấn công
+			// 		if (attackType === "GAUSSIAN_MODEL_POISONING") {
+			// 			basePayload.std = parseFloat(formData.get("std"));
+			// 		} else if (attackType === "LABEL_FLIPPING") {
+			// 			basePayload.source_class = parseInt(formData.get("source_class"));
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_flip"),
+			// 			);
+			// 		} else if (attackType === "BACKDOOR") {
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_backdoor"),
+			// 			);
+			// 		} else if (attackType == "GIA") {
+			// 			basePayload.gia_iterations = parseInt(
+			// 				formData.get("gia_iterations"),
+			// 			);
+			// 			basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+			// 		} else if (attackType == "MIA") {
+			// 			// 1. Lấy subset size
+			// 			basePayload.mia_subset_size =
+			// 				parseInt(formData.get("mia_subset_size")) || 1000;
+
+			// 			// 2. Lấy Tau (xử lý trường hợp để trống)
+			// 			const tauInput = formData.get("mia_tau");
+			// 			if (tauInput && tauInput.trim() !== "") {
+			// 				basePayload.tau = parseFloat(tauInput);
+			// 			} else {
+			// 				basePayload.tau = null; // Backend sẽ tự tính toán
+			// 			}
+			// 		}
+
+			// 		console.log(`Bắt đầu chạy tấn công ${targetRounds} vòng...`);
+
+			// 		try {
+			// 			// --- VÒNG LẶP GỬI REQUEST ---
+			// 			for (let i = 0; i < targetRounds; i++) {
+			// 				// Cập nhật text loading
+			// 				loadingText.innerText = `Đang tấn công vòng ${i + 1} / ${targetRounds}...`;
+
+			// 				// Cập nhật trạng thái Reset: Chỉ reset vòng đầu tiên
+			// 				const currentPayload = {
+			// 					...basePayload,
+			// 					reset: i === 0 ? initialReset : false,
+			// 				};
+
+			// 				// Gửi Request
+			// 				const response = await fetch("/run_round", {
+			// 					method: "POST",
+			// 					headers: { "Content-Type": "application/json" },
+			// 					body: JSON.stringify(currentPayload),
+			// 				});
+
+			// 				const result = await response.json();
+
+			// 				if (result.status !== "success") {
+			// 					throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+			// 				}
+
+			// 				console.log(`Hoàn thành vòng ${i + 1}`);
+			// 			}
+
+			// 			// Chạy xong hết thì chuyển trang
+			// 			window.location.href = "/dashboard";
+			// 		} catch (error) {
+			// 			console.error("Error:", error);
+			// 			alert("Có lỗi xảy ra: " + error.message);
+			// 			loadingOverlay.classList.add("d-none");
+			// 			// Reset text loading về mặc định
+			// 			loadingText.innerText = "Đang khởi tạo Engine...";
+			// 		}
+			// 	});
+
 			document
 				.getElementById("attackForm")
 				.addEventListener("submit", async function (e) {
@@ -857,105 +1050,124 @@
 					const loadingOverlay = document.getElementById("loadingOverlay");
 					const loadingText = loadingOverlay.querySelector("h4");
 					loadingOverlay.classList.remove("d-none");
-
-					const formData = new FormData(this);
-					const attackType = formData.get("attack_type");
-
-					// Lấy số vòng lặp mục tiêu và trạng thái reset ban đầu
-					const targetRounds =
-						parseInt(document.getElementById("targetRoundsAttack").value) || 1;
-					const initialReset =
-						document.getElementById("resetSwitchAttack").checked;
-
-					// Tạo Base Payload (Các tham số cố định)
-					const basePayload = {
-						scenario: "4", // Hoặc "2" tùy logic backend của bạn
-						system_mode: formData.get("system_mode"),
-						dataset: formData.get("dataset"),
-						model: formData.get("model"),
-						num_workers: parseInt(formData.get("num_workers")),
-						malicious_ratio: parseFloat(formData.get("malicious_ratio")),
-						attack_type: attackType,
-						batch_size: parseInt(formData.get("batch_size")),
-						learning_rate: parseFloat(formData.get("learning_rate")),
-					};
-
-					// Thêm params riêng cho BASELINE
-					if (basePayload.system_mode === "BASELINE") {
-						basePayload.aggregation_algorithm = formData.get(
-							"aggregation_algorithm",
-						);
-					}
-
-					// Thêm params riêng cho từng loại Tấn công
-					if (attackType === "GAUSSIAN_MODEL_POISONING") {
-						basePayload.std = parseFloat(formData.get("std"));
-					} else if (attackType === "LABEL_FLIPPING") {
-						basePayload.source_class = parseInt(formData.get("source_class"));
-						basePayload.target_class = parseInt(
-							formData.get("target_class_flip"),
-						);
-					} else if (attackType === "BACKDOOR") {
-						basePayload.target_class = parseInt(
-							formData.get("target_class_backdoor"),
-						);
-					} else if (attackType == "GIA") {
-						basePayload.gia_iterations = parseInt(
-							formData.get("gia_iterations"),
-						);
-						basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
-					} else if (attackType == "MIA") {
-						// 1. Lấy subset size
-						basePayload.mia_subset_size =
-							parseInt(formData.get("mia_subset_size")) || 1000;
-
-						// 2. Lấy Tau (xử lý trường hợp để trống)
-						const tauInput = formData.get("mia_tau");
-						if (tauInput && tauInput.trim() !== "") {
-							basePayload.tau = parseFloat(tauInput);
-						} else {
-							basePayload.tau = null; // Backend sẽ tự tính toán
-						}
-					}
-
-					console.log(`Bắt đầu chạy tấn công ${targetRounds} vòng...`);
+					loadingText.innerText = "Đang khởi tạo Engine...";
 
 					try {
-						// --- VÒNG LẶP GỬI REQUEST ---
-						for (let i = 0; i < targetRounds; i++) {
-							// Cập nhật text loading
-							loadingText.innerText = `Đang tấn công vòng ${i + 1} / ${targetRounds}...`;
+						const formData = new FormData(this);
+						const attackType = formData.get("attack_type");
 
-							// Cập nhật trạng thái Reset: Chỉ reset vòng đầu tiên
-							const currentPayload = {
-								...basePayload,
-								reset: i === 0 ? initialReset : false,
-							};
+						// Lấy số vòng lặp mục tiêu
+						const targetRounds =
+							parseInt(document.getElementById("targetRoundsAttack").value) ||
+							1;
+						const initialReset =
+							document.getElementById("resetSwitchAttack").checked; // Server tự handle reset
 
-							// Gửi Request
-							const response = await fetch("/run_round", {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify(currentPayload),
-							});
+						// 2. Tạo Base Payload
+						const basePayload = {
+							scenario: "4", // Scenario 4 là Security
+							system_mode: formData.get("system_mode"),
+							dataset: formData.get("dataset"),
+							model: formData.get("model"),
+							num_workers: parseInt(formData.get("num_workers")),
+							malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+							attack_type: attackType,
+							batch_size: parseInt(formData.get("batch_size")),
+							learning_rate: parseFloat(formData.get("learning_rate")),
+							target_rounds: targetRounds, // Gửi số vòng lên server
+							num_classes: parseInt(
+								document.getElementById("num_classes").value,
+							),
+							reset: initialReset,
+						};
 
-							const result = await response.json();
-
-							if (result.status !== "success") {
-								throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
-							}
-
-							console.log(`Hoàn thành vòng ${i + 1}`);
+						// Thêm params riêng cho BASELINE (nếu chọn Baseline bị tấn công)
+						if (basePayload.system_mode === "BASELINE") {
+							basePayload.aggregation_algorithm = formData.get(
+								"aggregation_algorithm",
+							);
 						}
 
-						// Chạy xong hết thì chuyển trang
-						window.location.href = "/dashboard";
+						// Thêm params riêng cho từng loại Tấn công
+						if (attackType === "GAUSSIAN_MODEL_POISONING") {
+							basePayload.std = parseFloat(formData.get("std"));
+						} else if (attackType === "LABEL_FLIPPING") {
+							basePayload.source_class = parseInt(formData.get("source_class"));
+							basePayload.target_class = parseInt(formData.get("target_class"));
+						} else if (attackType === "BACKDOOR") {
+							basePayload.target_class = parseInt(
+								formData.get("target_class_backdoor"),
+							);
+						} else if (attackType === "GIA") {
+							basePayload.gia_iterations = parseInt(
+								formData.get("gia_iterations"),
+							);
+							basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+						} else if (attackType === "MIA") {
+							basePayload.mia_subset_size =
+								parseInt(formData.get("mia_subset_size")) || 1000;
+							const tauInput = formData.get("mia_tau");
+							basePayload.tau =
+								tauInput && tauInput.trim() !== ""
+									? parseFloat(tauInput)
+									: null;
+						}
+
+						console.log(
+							`Gửi lệnh chạy tấn công ${targetRounds} vòng...`,
+							basePayload,
+						);
+
+						// 3. Gửi lệnh Start Training (Chỉ 1 request duy nhất)
+						const response = await fetch("/start_training", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(basePayload),
+						});
+
+						const data = await response.json();
+						if (data.status !== "started") throw new Error(data.message);
+
+						// 4. Polling trạng thái
+						const checkStatus = setInterval(async () => {
+							try {
+								const res = await fetch("/training_status");
+								const status = await res.json();
+
+								// Cập nhật giao diện
+								loadingText.innerText = `Server đang xử lý: ${status.message}`;
+								if (status.total_rounds > 0) {
+									loadingText.innerText += ` (${status.current_round}/${status.total_rounds})`;
+								}
+
+								// Kiểm tra hoàn thành
+								if (!status.is_running && status.message === "Completed") {
+									clearInterval(checkStatus);
+									console.log("Training hoàn tất!");
+
+									// Chuyển trang dashboard
+									// basePayload vẫn truy cập được ở đây nhờ Closure của JS
+									const queryParams = new URLSearchParams({
+										nodes: basePayload.num_workers,
+										rounds: targetRounds,
+										attack: attackType, // Thêm tham số attack để dashboard biết
+									});
+									window.location.href = `/dashboard?${queryParams.toString()}`;
+								} else if (
+									!status.is_running &&
+									status.message.startsWith("Error")
+								) {
+									clearInterval(checkStatus);
+									throw new Error(status.message);
+								}
+							} catch (err) {
+								console.error("Polling error:", err);
+							}
+						}, 1000); // Hỏi mỗi 1 giây
 					} catch (error) {
-						console.error("Error:", error);
+						console.error("Lỗi:", error);
 						alert("Có lỗi xảy ra: " + error.message);
 						loadingOverlay.classList.add("d-none");
-						// Reset text loading về mặc định
-						loadingText.innerText = "Đang khởi tạo Engine...";
 					}
 				});
 			// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////

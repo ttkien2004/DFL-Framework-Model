@@ -32,3 +32,5 @@ docker-compose.override.yml
 
 # --- Reconstructed images
 reconstructed_images/*.png
+
+histories/*

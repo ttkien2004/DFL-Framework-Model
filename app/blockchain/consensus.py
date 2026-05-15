@@ -22,7 +22,7 @@ class Blockchain:
         self.reward = {}
         self.storage_dir = storage_dir
         # all_nodes = committee_config.get('workers', [])
-        
+        os.makedirs(storage_dir, exist_ok=True)
         # self._initialize_reputation(all_nodes)
         # self._initialize_faults(all_nodes)
         self.current_round_k_models = {}

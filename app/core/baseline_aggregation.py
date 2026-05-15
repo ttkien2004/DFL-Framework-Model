@@ -24,10 +24,15 @@ class AggregationAlgorithms:
         
         for key in avg_model.keys():
             # Cộng dồn tham số
-            for i in range(1, n):
-                avg_model[key] += updates[i][key]
-            # Chia trung bình
-            avg_model[key] = torch.div(avg_model[key], n)
+            layer_updates = [update[key].cpu() for update in updates]
+            
+            # Chỉ tính trung bình nếu là số thực (Float)
+            if layer_updates[0].is_floating_point():
+                import torch
+                avg_model[key] = torch.stack(layer_updates).mean(dim=0).clone().detach()
+            else:
+                # Nếu là số nguyên (như num_batches_tracked), giữ nguyên
+                avg_model[key] = layer_updates[0].clone().detach()
             
         return avg_model
 
