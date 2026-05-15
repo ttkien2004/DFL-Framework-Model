@@ -251,6 +251,15 @@ class ClusterHead(Proposer):
         Hàm helper: Tạo mảnh và Mã hóa cho một Ủy ban cụ thể.
         Được dùng trong aggregate() và dùng lại khi View Change.
         """
+        # Validate flat_weights
+        if not isinstance(flat_weights, torch.Tensor):
+            print(f"[ERROR] flat_weights is not a Tensor: type={type(flat_weights)}")
+            return {}
+        
+        if flat_weights.numel() == 0:
+            print(f"[ERROR] flat_weights is empty (0 elements)")
+            return {}
+        
         sorted_committee = sorted(committee, key=lambda x: x.id)
         committee_ids = sorted([n.id for n in sorted_committee])
 
@@ -318,14 +327,24 @@ class ClusterHead(Proposer):
         model_norm = compute_model_norm(avg_state)
         # Tính Hash
         model_hash = compute_model_hash(avg_state)
+        
         ## Phân mảnh bí mật (SHAMIR SECRET SHARING)
-        flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
+        try:
+            flat_weights, metadata = SecretSharingUtils.flatten_weights(avg_state)
+        except Exception as e:
+            # Nếu lỗi khi flatten (vd: avg_state rỗng), dùng model cũ
+            print(f"[ClusterHead {self.cluster_id}] Error flattening: {e}")
+            flat_weights = None
+            metadata = {}
 
         # with open("avg_model.txt", "w", encoding="utf-8") as f:
         #     f.write(str(avg_state))
         # Tạo n mảnh bí mật
         # t: Ngưỡng, n: số thành viên ủy ban
-        encrypted_packets = self.distribute_shares_to_committee(flat_weights=flat_weights, committee=self.committee)
+        if flat_weights is not None:
+            encrypted_packets = self.distribute_shares_to_committee(flat_weights=flat_weights, committee=self.committee)
+        else:
+            encrypted_packets = None
 
         self.pending_models = []
         
@@ -336,7 +355,7 @@ class ClusterHead(Proposer):
             "model_hash": model_hash,
             "model_norm": model_norm,
             "flat_weights": flat_weights,
-            "rejected_workers": self.rejected_workers
+            "model_state_dict": avg_state  # AGREGADO: retornar também o state_dict
         }
 
     

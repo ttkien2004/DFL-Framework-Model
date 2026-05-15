@@ -4,9 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 
-def get_model(model_name, num_classes=10):
+def get_model(model_name, num_classes=10, input_dim=None):
     """
     Factory function để lấy mô hình theo tên
+    
+    Args:
+        model_name: Tên mô hình (resnet18, mobilenet_v2, vgg9, simple_cnn, resnet20, health_mlp)
+        num_classes: Số lớp phân loại
+        input_dim: Dimensão đầu vào (chỉ dùng cho health_mlp)
     """
     model_name = model_name.lower()
     
@@ -31,7 +36,10 @@ def get_model(model_name, num_classes=10):
     elif model_name == 'resnet20':
         return ResNet20(num_classes=num_classes)
     elif model_name == 'health_mlp':
-        return HealthMLP(num_classes=num_classes)
+        # Nếu input_dim không được chỉ định, dự đoán từ dataset
+        if input_dim is None:
+            input_dim = 44  # Giá trị mặc định sau one-hot encoding
+        return HealthMLP(input_dim=input_dim, num_classes=num_classes)
         
     else:
         raise ValueError(f"Unknown model name: {model_name}")
@@ -239,28 +247,51 @@ class HarMLP(nn.Module):
         return x
     
 class HealthMLP(nn.Module):
-    def __init__(self, input_dim=36, num_classes=2): 
+    def __init__(self, input_dim=None, num_classes=2): 
         super(HealthMLP, self).__init__()
         
-        # Lớp ẩn 1
+        # Se input_dim não foi especificado, usar um valor padrão
+        # que será ajustado na primeira forward pass se necessário
+        if input_dim is None:
+            # Use placeholder input_dim - será ajustado dinamicamente
+            input_dim = 44  # Valor padrão após one-hot encoding
+        
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.initialized = False
+        
+        # Inicializar as camadas agora
+        self._build_layers(input_dim)
+
+    def _build_layers(self, input_dim):
+        """Constrói as camadas da rede"""
+        if self.initialized and self.input_dim == input_dim:
+            return
+        
         self.fc1 = nn.Linear(input_dim, 128)
         self.ln1 = nn.LayerNorm(128)
         
-        # Lớp ẩn 2
         self.fc2 = nn.Linear(128, 64)
         self.ln2 = nn.LayerNorm(64)
         
-        # Lớp ẩn 3
         self.fc3 = nn.Linear(64, 32)
         self.ln3 = nn.LayerNorm(32)
         
-        # Phân loại đầu ra (Anomaly hay Normal)
-        self.fc_out = nn.Linear(32, num_classes)
+        self.fc_out = nn.Linear(32, self.num_classes)
         
-        # Dropout để chống Overfitting trên thiết bị IoT
         self.dropout = nn.Dropout(0.3)
+        self.initialized = True
+        self.input_dim = input_dim
 
     def forward(self, x):
+        # Se a dimensão de entrada é diferente, rebuild as camadas
+        actual_input_dim = x.shape[1]
+        if self.input_dim != actual_input_dim and not self.initialized:
+            self._build_layers(actual_input_dim)
+        elif self.input_dim != actual_input_dim:
+            # Se já foi inicializado com dimensão diferente, tentar recriar
+            self._build_layers(actual_input_dim)
+        
         x = F.relu(self.ln1(self.fc1(x)))
         x = self.dropout(x)
         
