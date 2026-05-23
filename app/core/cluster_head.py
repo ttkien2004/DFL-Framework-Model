@@ -21,7 +21,7 @@ class ClusterHead(Proposer):
         # Khởi tạo model dựa trên Config
         model_name = config.get('model')
         # Aggregated model
-        self.global_model = get_model(model_name, num_classes=self.num_classes).to(self.device)
+        self.global_model = get_model(model_name, num_classes=self.num_classes, input_channels=self.input_channels).to(self.device)
         # try:
         #     self.global_model = get_model(Config.MODEL_NAME).to(Config.DEVICE)
         # except:
@@ -56,7 +56,7 @@ class ClusterHead(Proposer):
         if dataset_name == 'gtsrb': num_classes = 43
         else: num_classes = 10
 
-        self.global_model = get_model(Config.MODEL_NAME, num_classes=num_classes)
+        self.global_model = get_model(Config.MODEL_NAME, num_classes=num_classes, input_channels=self.input_channels)
         self.pending_models = []
         print(f"[CH {self.cluster_id}] Reset global model for {dataset_name}")
     

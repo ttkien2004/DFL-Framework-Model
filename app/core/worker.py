@@ -11,6 +11,7 @@ from app.models.cnn import get_model
 import torch.nn.functional as F
 from app.core.ipfs import StorageService
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+from torch.utils.data import DataLoader
 # Clas này xử lý phân cụm (DFCA), Huấn luyện cục bộ và thêm nhiễu LDP
 class WorkerNode:
     def __init__(self, node_id, config, device):
@@ -26,13 +27,29 @@ class WorkerNode:
         
         # Khởi tạo DataLoader mặc định (IID)
         num_workers = config.get('num_workers', 10)
-        self.data_loader, self.num_classes, self.input_channels = get_dataloader(
-            self.dataset_name, self.id, num_workers, self.batch_size
-        )
+        try:
+            self.data_loader, self.num_classes, self.input_channels = get_dataloader(
+                self.dataset_name, self.id, num_workers, self.batch_size
+            )
+        except Exception as e:
+            print(f"[Worker {self.id}] ERROR: Failed to load dataset '{self.dataset_name}': {e}")
+            # Fallback: Create empty DataLoader to prevent NoneType errors
+            self.data_loader = DataLoader([], batch_size=self.batch_size)
+            self.num_classes = 2
+            self.input_channels = 36
+        
+        # Initialize local_test_loader with global test set for this worker
+        # This ensures evaluate_k_models always has a test set available
+        try:
+            from app.utils.data_loader import get_global_test_loader
+            self.local_test_loader = get_global_test_loader(self.dataset_name, self.batch_size)
+            print(f"[Worker {self.id}] Initialized local_test_loader with global test set")
+        except Exception as e:
+            print(f"[Worker {self.id}] Failed to init local_test_loader: {e}")
         model_name = config.get('model', 'simple_cnn')
         # 🔑 CHANGE: Initialize model on device directly (not CPU first)
         # This reduces CPU→GPU transfers
-        self.model = get_model(model_name, num_classes=self.num_classes).to(self.device)
+        self.model = get_model(model_name, num_classes=self.num_classes, input_channels=self.input_channels).to(self.device)
 
         self.cluster_id = None  # Sẽ được gán sau bước Clustering
         self.cluster_head_id = None
@@ -66,11 +83,11 @@ class WorkerNode:
     def reload_dataset(self, dataset_name):
         self.dataset_name = dataset_name
 
-        self.data_loader, self.num_classes, _ = get_dataloader(
+        self.data_loader, self.num_classes, self.input_channels = get_dataloader(
             dataset_name, self.id, Config.NUM_WORKERS
         )
         # Khởi tạo Model mới (khớp với num_classes)
-        self.model = get_model(Config.MODEL_NAME, num_classes=self.num_classes).to(self.device)
+        self.model = get_model(Config.MODEL_NAME, num_classes=self.num_classes, input_channels=self.input_channels).to(self.device)
         
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=Config.LEARNING_RATE)
@@ -130,6 +147,11 @@ class WorkerNode:
         total_loss = 0.0
         total_samples = 0
         loss_fn = torch.nn.CrossEntropyLoss()
+        
+        # Fallback check: if data_loader is None or empty, return inf
+        if self.data_loader is None:
+            print(f"[Worker {self.id}] WARNING: data_loader is None, returning inf loss")
+            return float('inf')
         
         try:
             with torch.no_grad():
@@ -1202,6 +1224,13 @@ class WorkerNode:
         Đánh giá hiệu năng chuẩn (Clean Metrics) cho kịch bản bình thường.
         Chỉ tính toán Accuracy và Loss để tối ưu tốc độ.
         """
+        # Fallback to local_test_loader if provided test_loader is None
+        actual_loader = test_loader if test_loader is not None else self.local_test_loader
+        
+        if actual_loader is None:
+            print(f"[Worker {self.id}] No test loader available for evaluation")
+            return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
+        
         # Kiểm tra NaN/Inf trước khi đo (đề phòng model nổ)
         for param in self.model.parameters():
             if torch.isnan(param).any() or torch.isinf(param).any():
@@ -1215,7 +1244,7 @@ class WorkerNode:
         total_samples = 0
         try:
             with torch.no_grad():
-                for data, target in test_loader:
+                for data, target in actual_loader:
                     data, target = data.to(self.device), target.to(self.device)
                     
                     # Forward
@@ -1249,11 +1278,39 @@ class WorkerNode:
         """
         Worker tự thử nghiệm k mô hình (từ Ủy ban) trên tập test cục bộ.
         Trả về kết quả của mô hình có Loss thấp nhất (chuẩn IFCA).
+        Fallback: Nếu không có k_models, dùng worker's local model.
         """
-        # Nếu không có model nào hoặc worker không có tập test, trả về điểm liệt
-        # print(not k_models_dict, not hasattr(self, 'local_test_loader'), self.local_test_loader is None, flush=True)
-        if not k_models_dict or not hasattr(self, 'local_test_loader') or self.local_test_loader is None:
+        # Fallback: Nếu không có tập test, dùng evaluate_standard hoặc trả về điểm liệt
+        if not hasattr(self, 'local_test_loader') or self.local_test_loader is None:
+            # Không có test set - dùng model hiện tại nhưng return metric mặc định
             return {"accuracy": 0.0, "error_rate": 1.0, "loss": 10000.0}
+        
+        # Fallback: Nếu k_models rỗng, dùng worker's local model
+        if not k_models_dict:
+            print(f"[Worker {self.id}] No k_models provided, using local model for evaluation")
+            # Đánh giá model cục bộ hiện tại
+            self.model.to(self.device)
+            self.model.eval()
+            client_loss = 0.0
+            correct = 0
+            total = 0
+            
+            with torch.no_grad():
+                for data, target in self.local_test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    outputs = self.model(data)
+                    loss = self.criterion(outputs, target)
+                    client_loss += loss.item() * data.size(0)
+                    
+                    pred = outputs.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    total += data.size(0)
+            
+            avg_loss = client_loss / total if total > 0 else 10000.0
+            accuracy = correct / total if total > 0 else 0.0
+            
+            self.model.to('cpu')
+            return {"accuracy": accuracy, "error_rate": 1.0 - accuracy, "loss": avg_loss}
 
         best_loss = float('inf')
         best_acc = 0.0

@@ -19,13 +19,13 @@ import argparse
 import threading
 
 # Biscotti imports
-from app.biscotti.blockchain import Blockchain as BiscottiBlockchain
-from app.biscotti.vrf import VRF
-from app.biscotti.krum import KRUM
-from app.biscotti.federated import FederatedNode, aggregate_updates
-from app.biscotti.rpc import NodeCommunicator
-from app.biscotti.evaluator import GlobalEvaluator
-from app.models.cnn import get_model
+# from app.biscotti.blockchain import Blockchain as BiscottiBlockchain
+# from app.biscotti.vrf import VRF
+# from app.biscotti.krum import KRUM
+# from app.biscotti.federated import FederatedNode, aggregate_updates
+# from app.biscotti.rpc import NodeCommunicator
+# from app.biscotti.evaluator import GlobalEvaluator
+# from app.models.cnn import get_model
 
 import json
 import os
@@ -254,85 +254,85 @@ def get_training_status():
     return jsonify(training_status)
 
 
-@app.route('/run_biscotti', methods=['POST'])
-def run_biscotti():
-    import time
-    import random
+# @app.route('/run_biscotti', methods=['POST'])
+# def run_biscotti():
+#     import time
+#     import random
     
-    # Simple Biscotti simulation with metrics
-    bc = BiscottiBlockchain()
-    vrf = VRF()
-    krum = KRUM()
-    nodes = [FederatedNode(model_name='simple_cnn') for _ in range(3)]  # 3 nodes
-    stake_map = {i: 1 for i in range(3)}
+#     # Simple Biscotti simulation with metrics
+#     bc = BiscottiBlockchain()
+#     vrf = VRF()
+#     krum = KRUM()
+#     nodes = [FederatedNode(model_name='simple_cnn') for _ in range(3)]  # 3 nodes
+#     stake_map = {i: 1 for i in range(3)}
 
-    # Khởi tạo Evaluator với cấu trúc mô hình tương ứng
-    base_model = get_model('simple_cnn', 10) 
-    evaluator = GlobalEvaluator(base_model)
+#     # Khởi tạo Evaluator với cấu trúc mô hình tương ứng
+#     base_model = get_model('simple_cnn', 10) 
+#     evaluator = GlobalEvaluator(base_model)
     
-    ATTACK_TYPE = "LABEL_FLIPPING" # Hoặc "GAUSS", "BACKDOOR"
-    MALICIOUS_RATIO = 0.3
-    TOTAL_NODES = 30
-    malicious_count = int(TOTAL_NODES * MALICIOUS_RATIO)
+#     ATTACK_TYPE = "LABEL_FLIPPING" # Hoặc "GAUSS", "BACKDOOR"
+#     MALICIOUS_RATIO = 0.3
+#     TOTAL_NODES = 30
+#     malicious_count = int(TOTAL_NODES * MALICIOUS_RATIO)
     
-    # Giả định các node đầu tiên (0 đến malicious_count-1) là node độc hại
-    malicious_node_ids = set(range(malicious_count))
+#     # Giả định các node đầu tiên (0 đến malicious_count-1) là node độc hại
+#     malicious_node_ids = set(range(malicious_count))
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
-        start_time = time.time()
-        updates = []
+#     for iteration in range(1, MAX_ITERATIONS + 1):
+#         start_time = time.time()
+#         updates = []
         
-        for node_id, node in enumerate(nodes):
-            is_malicious = node_id in malicious_node_ids
-            # Cần chỉnh sửa hàm train_local trong federated.py để nhận cờ is_malicious và attack_type
-            delta = node.train_local(bc.get_latest_global_weights(), noise_scale=1.0, is_malicious=is_malicious, attack_type=ATTACK_TYPE)
-            updates.append(delta)
+#         for node_id, node in enumerate(nodes):
+#             is_malicious = node_id in malicious_node_ids
+#             # Cần chỉnh sửa hàm train_local trong federated.py để nhận cờ is_malicious và attack_type
+#             delta = node.train_local(bc.get_latest_global_weights(), noise_scale=1.0, is_malicious=is_malicious, attack_type=ATTACK_TYPE)
+#             updates.append(delta)
             
-        # Krum kiểm tra và trả về cả indices
-        accepted, accepted_indices = krum.validate(updates)
+#         # Krum kiểm tra và trả về cả indices
+#         accepted, accepted_indices = krum.validate(updates)
         
-        # Tính Max.TER (Toxic Error Rate) = Số lượng nút độc hại lọt qua / Tổng số nút lọt qua
-        malicious_accepted = sum(1 for idx in accepted_indices if idx in malicious_node_ids)
-        max_ter = malicious_accepted / len(accepted_indices) if len(accepted_indices) > 0 else 0.0
+#         # Tính Max.TER (Toxic Error Rate) = Số lượng nút độc hại lọt qua / Tổng số nút lọt qua
+#         malicious_accepted = sum(1 for idx in accepted_indices if idx in malicious_node_ids)
+#         max_ter = malicious_accepted / len(accepted_indices) if len(accepted_indices) > 0 else 0.0
 
-        # Cập nhật và tính toán Global Model
-        new_weights = aggregate_updates(accepted, bc.get_latest_global_weights())
-        bc.add_block({'iteration': iteration, 'global_weights': new_weights}, stake_map)
+#         # Cập nhật và tính toán Global Model
+#         new_weights = aggregate_updates(accepted, bc.get_latest_global_weights())
+#         bc.add_block({'iteration': iteration, 'global_weights': new_weights}, stake_map)
         
-        # ---------------------------------------------------------
-        # CHẠY ĐÁNH GIÁ THỰC TẾ TRÊN TẬP TEST
-        # ---------------------------------------------------------
-        metrics = evaluator.evaluate(new_weights, attack_type=ATTACK_TYPE, src_class=3, tgt_class=5)
+#         # ---------------------------------------------------------
+#         # CHẠY ĐÁNH GIÁ THỰC TẾ TRÊN TẬP TEST
+#         # ---------------------------------------------------------
+#         metrics = evaluator.evaluate(new_weights, attack_type=ATTACK_TYPE, src_class=3, tgt_class=5)
         
-        training_time = time.time() - start_time
+#         training_time = time.time() - start_time
         
-        # Lưu vào lịch sử
-        history["rounds"].append(iteration)
-        history["system_mode"].append("BISCOTTI")
-        history["execution_time"].append(training_time)
-        history["avg_acc"].append(metrics["avg_acc"])
-        history["avg_loss"].append(metrics["avg_loss"])
-        history["max_ter"].append(max_ter)
-        history["asr"].append(metrics["asr"])
-        history["f1"].append(metrics["f1"])
-        history["auc"].append(metrics["auc"])
-        history["src_recall"].append(metrics["src_recall"])
-        history["tgt_precision"].append(metrics["tgt_precision"])
-        history["blockchain_height"].append(len(bc.chain))
+#         # Lưu vào lịch sử
+#         history["rounds"].append(iteration)
+#         history["system_mode"].append("BISCOTTI")
+#         history["execution_time"].append(training_time)
+#         history["avg_acc"].append(metrics["avg_acc"])
+#         history["avg_loss"].append(metrics["avg_loss"])
+#         history["max_ter"].append(max_ter)
+#         history["asr"].append(metrics["asr"])
+#         history["f1"].append(metrics["f1"])
+#         history["auc"].append(metrics["auc"])
+#         history["src_recall"].append(metrics["src_recall"])
+#         history["tgt_precision"].append(metrics["tgt_precision"])
+#         history["blockchain_height"].append(len(bc.chain))
 
-    # Save history
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs("histories", exist_ok=True)
-    history_filename = f"histories/history_{timestamp}_BISCOTTI.json"
-    with open(history_filename, "w") as f:
-        json.dump(history, f, indent=4)
+#     # Save history
+#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#     os.makedirs("histories", exist_ok=True)
+#     history_filename = f"histories/history_{timestamp}_BISCOTTI.json"
+#     with open(history_filename, "w") as f:
+#         json.dump(history, f, indent=4)
     
-    return jsonify({
-        "message": "Biscotti simulation completed", 
-        "blocks": len(bc.chain),
-        "history_file": history_filename,
-        "metrics": history
-    })
+#     return jsonify({
+#         "message": "Biscotti simulation completed", 
+#         "blocks": len(bc.chain),
+#         "history_file": history_filename,
+#         "metrics": history
+#     })
 
 
 # ================ ABLATION STUDY ENDPOINTS ================

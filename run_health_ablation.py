@@ -13,9 +13,11 @@ from app.core.engine import SimulationEngine
 from app.core.bypass_ablation import BypassConfig
 
 
-def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
+def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_type="NONE", 
+                               gia_iterations=2000, gia_lr=1.0, attack_rate=0.1):
     """
-    Versão simplificada que evita problemas de avaliação de modelo
+    Versão simplificada que evita problemas de avaliação de modelo.
+    Suporta attack types incluindo GIA (Gradient Inversion Attack).
     """
     scenario_name = BypassConfig.get_name(bypass_mode)
     
@@ -26,6 +28,12 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
     print(f"  Workers: {num_workers}")
     print(f"  Dataset: health")
     print(f"  Model: health_mlp")
+    if attack_type != "NONE":
+        print(f"  Attack Type: {attack_type}")
+        if attack_type in ["GIA", "GRADIENT_INVERSION"]:
+            print(f"  GIA Iterations: {gia_iterations}")
+            print(f"  GIA Learning Rate: {gia_lr}")
+        print(f"  Attack Rate: {attack_rate}")
     print("="*80 + "\n")
     
     # Cấu hình simplificada
@@ -39,7 +47,12 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
         "non_iid_alpha": 0.5,
         "system_mode": "PROPOSED",
         "num_classes": 2,
-        "reset": True
+        "reset": True,
+        # Attack configuration
+        "attack_type": attack_type,
+        "attack_rate": attack_rate,
+        "gia_iterations": gia_iterations,
+        "gia_lr": gia_lr
     }
     
     # Khởi tạo engine
@@ -93,6 +106,10 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
             comm_traffic = result.get('comm_traffic_mb', 0.0)
             exec_time = result.get('execution_time', elapsed)
             
+            # Lấy GIA metrics nếu có (MSE/PSNR từ Gradient Inversion Attack)
+            recon_mse = result.get('recon_mse', None)
+            recon_psnr = result.get('recon_psnr', None)
+            
             # Convert lista -> scalar nếu cần
             if isinstance(avg_acc, (list, tuple)):
                 avg_acc = avg_acc[0] if avg_acc else 0.0
@@ -112,6 +129,10 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
             comm_traffic = float(comm_traffic) if comm_traffic is not None else 0.0
             exec_time = float(exec_time) if exec_time is not None else elapsed
             
+            # Convert GIA metrics to float
+            recon_mse = float(recon_mse) if recon_mse is not None else None
+            recon_psnr = float(recon_psnr) if recon_psnr is not None else None
+            
             # Update history với metrics thực
             history['avg_acc'].append(avg_acc)
             history['avg_loss'].append(avg_loss)
@@ -119,12 +140,23 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers):
             history['comm_traffic_mb'].append(comm_traffic)
             history['execution_time'].append(exec_time)
             
+            # Add GIA metrics if available
+            if recon_mse is not None:
+                history['recon_mse'].append(recon_mse)
+            if recon_psnr is not None:
+                history['recon_psnr'].append(recon_psnr)
+            
             # Print metrics thực
             print(f"  [OK] Accuracy: {avg_acc:.4f}")
             print(f"      Loss: {avg_loss:.4f}")
             print(f"      TER: {max_ter:.4f}")
             print(f"      Traffic: {comm_traffic:.2f} MB")
-            print(f"      Time: {exec_time:.2f}s\n")
+            print(f"      Time: {exec_time:.2f}s")
+            
+            # Print GIA metrics if available
+            if recon_mse is not None and recon_psnr is not None:
+                print(f"      [GIA] MSE: {recon_mse:.6f}, PSNR: {recon_psnr:.2f} dB")
+            print()
             
         except Exception as e:
             print(f"  [ERROR] Round {round_id} critical failure: {str(e)}")
@@ -196,8 +228,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Standard ablation study (no attack)
   python run_health_ablation.py --bypass_mode 0 --rounds 5 --workers 20
+  
+  # GIA attack with recommended settings (5 rounds, 2000 iterations, 0.1 attack rate)
+  python run_health_ablation.py --bypass_mode 0 --rounds 5 --workers 30 --attack_type GIA --gia_iterations 2000 --attack_rate 0.1
+  
+  # Traditional DFL baseline
   python run_health_ablation.py --bypass_mode 15 --rounds 10 --workers 30
+  
+  # List available bypass modes
   python run_health_ablation.py --list_modes
         """)
     
@@ -207,6 +247,15 @@ Examples:
                        help="Number of training rounds")
     parser.add_argument("--workers", type=int, default=20,
                        help="Number of workers")
+    parser.add_argument("--attack_type", type=str, default="NONE",
+                       choices=["NONE", "LABEL_FLIPPING", "BACKDOOR", "MODEL_POISONING", "GIA", "GRADIENT_INVERSION", "MIA"],
+                       help="Attack type to simulate (GIA for Gradient Inversion Attack)")
+    parser.add_argument("--gia_iterations", type=int, default=2000,
+                       help="Number of iterations for GIA attack")
+    parser.add_argument("--gia_lr", type=float, default=1.0,
+                       help="Learning rate for GIA attack")
+    parser.add_argument("--attack_rate", type=float, default=0.1,
+                       help="Proportion of malicious workers (0.0-1.0)")
     parser.add_argument("--list_modes", action="store_true",
                        help="List all available bypass modes")
     
@@ -246,7 +295,11 @@ Examples:
     output_file = run_health_ablation_simple(
         bypass_mode=args.bypass_mode,
         total_rounds=args.rounds,
-        num_workers=args.workers
+        num_workers=args.workers,
+        attack_type=args.attack_type,
+        gia_iterations=args.gia_iterations,
+        gia_lr=args.gia_lr,
+        attack_rate=args.attack_rate
     )
     
     if output_file:

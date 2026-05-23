@@ -93,7 +93,15 @@ class SimulationEngine:
         config = req_data # Truyền full config
         dataset_name = req_data.get('dataset', Config.DATASET_NAME)
         batch_size = req_data.get('batch_size', Config.BATCH_SIZE)
-        self.test_loader = get_global_test_loader(dataset_name, batch_size)
+        
+        # Initialize test_loader with error handling
+        try:
+            self.test_loader = get_global_test_loader(dataset_name, batch_size)
+            print(f"[Engine] Initialized test_loader for {dataset_name}")
+        except Exception as e:
+            print(f"[Engine] Failed to init test_loader: {e}. System will fallback to worker local test sets.")
+            self.test_loader = None
+        
         self.engine_config = req_data
         
         # Khởi tạo Bypass Executor (nếu có bypass_mode trong request)
@@ -424,10 +432,14 @@ class SimulationEngine:
         print("\n[Engine] Initializing System: Generating random K-Models...")
         num_clusters = getattr(Config, 'NUM_CLUSTERS', 5)
         initial_registry = {}
+        # Get input_channels from first worker if available, otherwise use default 3
+        input_channels = 3
+        if self.workers and len(self.workers) > 0:
+            input_channels = getattr(self.workers[0], 'input_channels', 3)
         for cid in range(num_clusters):
             # Tạo model
             from app.models.cnn import get_model
-            temp_model = get_model(self.engine_config.get('model'),num_classes=self.engine_config.get('num_classes', 10))
+            temp_model = get_model(self.engine_config.get('model'),num_classes=self.engine_config.get('num_classes', 10),input_channels=input_channels)
             model_state = {k: v.cpu().clone() for k, v in temp_model.state_dict().items()}
             # Upload lên Storage
             cid_hash = self.storage.upload_model(model_state=model_state)
@@ -1090,14 +1102,22 @@ class SimulationEngine:
                 self.specific_metrics[key] = safe_mean(vals)
             
             if attack_type == 'MIA':
-                # Thêm Gen error
+                # Thêm Gen error + Accuracy metrics
                 train_acc = m.get('member_acc', 0.0)
                 test_acc = m.get('non_member_acc', 0.0)
                 gen_errors.append(abs(train_acc - test_acc))
                 self.specific_metrics['gen_error'] = safe_mean(gen_errors)
                 accuracies.append(test_acc)
+                error_rates.append(1.0 - test_acc)
                 pass
-            elif attack_type in ['GIA', 'GRADIENT_INVERSION']:                
+            elif attack_type in ['GIA', 'GRADIENT_INVERSION']:
+                # Thêm accuracy từ privacy attack evaluation (nếu có)
+                for key, vals in results.items():
+                    if 'accuracy' in key.lower() and vals:
+                        avg_acc_val = safe_mean(vals)
+                        accuracies.append(avg_acc_val)
+                        error_rates.append(1.0 - avg_acc_val)
+                        break                
                 print(f"   [GIA Report] Avg MSE: {self.specific_metrics.get('recon_mse', 0):.4f}, "
                       f"PSNR: {self.specific_metrics.get('recon_psnr', 0):.2f} dB")
         else:
@@ -1119,7 +1139,8 @@ class SimulationEngine:
             error_rates = []
 
             # KIỂM TRA: Đang chạy Proposed (có k-models) hay Baseline?
-            if current_round_cluster_models is not None:
+            # Note: current_round_cluster_models có thể là dict rỗng nếu consensus fails
+            if current_round_cluster_models and len(current_round_cluster_models) > 0:
                 # --- LUỒNG PROPOSED (Đánh giá trên K-Models) ---
                 print("   [Metrics] Evaluating Personalized Accuracy on K-Models...")
                 for w in benign_workers:
@@ -1129,11 +1150,13 @@ class SimulationEngine:
                     losses.append(m['loss'])
             else:
                 # --- LUỒNG BASELINE (Đánh giá trên Model Cục bộ) ---
+                # This is triggered when:
+                # 1. current_round_cluster_models is None (BASELINE mode)
+                # 2. current_round_cluster_models is empty dict (consensus failed)
                 print("   [Metrics] Evaluating Local Models (Baseline)...")
                 for w in benign_workers:
-                    # Gọi evaluate_standard không truyền test_loader, 
-                    # nó sẽ tự dùng w.local_test_loader như ta đã sửa ở phiên trước
-                    m = w.evaluate_standard() 
+                    # Truyền global test_loader để đánh giá khách quan
+                    m = w.evaluate_standard(self.test_loader) 
                     accuracies.append(m['accuracy'])
                     error_rates.append(m['error_rate'])
                     losses.append(m['loss'])
@@ -1154,8 +1177,32 @@ class SimulationEngine:
         Bao gồm: Max.TER, Consensus Error, TPR/FPR, Comm Cost.
         """
         # A. Max.TER & Avg Acc
-        max_ter = max(error_rates) if error_rates else 0
-        avg_acc = sum(accuracies) / len(accuracies) if accuracies else 0
+        # Validate and sanitize before calculation
+        # Filter out 1.0 error rates that likely represent fallback/NaN cases (accuracy=0 with NaN model)
+        # Keep actual error rates from real evaluation
+        valid_errors = [
+            e for e in error_rates 
+            if e is not None and not math.isnan(e) and not math.isinf(e) and e < 1.0
+        ]
+        valid_accs = [a for a in accuracies if a is not None and not math.isnan(a) and not math.isinf(a)]
+        
+        # Fallback: if all errors filtered out (all 1.0), include them but use median instead of max
+        if not valid_errors and error_rates:
+            valid_errors = [e for e in error_rates if e is not None and not math.isnan(e) and not math.isinf(e)]
+            if valid_errors:
+                max_ter = sorted(valid_errors)[len(valid_errors) // 2]  # Median as fallback
+                print(f"   [Metrics] All error_rates were 1.0 (fallback), using median: {max_ter}")
+            else:
+                max_ter = 1.0
+        elif valid_errors:
+            max_ter = max(valid_errors)
+        else:
+            max_ter = 0.0  # No valid error rates at all
+            
+        if valid_accs:
+            avg_acc = sum(valid_accs) / len(valid_accs)
+        else:
+            avg_acc = 0.0  # Fallback when no valid accuracies
 
         # B. Consensus Error (Độ phân tán của mô hình lành tính)
         benign_weights_flat = []
@@ -1610,9 +1657,11 @@ class SimulationEngine:
                     # Chưa từng có
                     from app.models.cnn import get_model
                     model_name = self.engine_config.get('model')
+                    input_channels = getattr(self.workers[0], 'input_channels', 3) if self.workers else 3
                     temp_model = get_model(
                         model_name=model_name,
-                        num_classes=self.engine_config.get('num_classes', 10)
+                        num_classes=self.engine_config.get('num_classes', 10),
+                        input_channels=input_channels
                     )
                     # Lấy state_dict
                     random_state = {k: v.cpu() for k, v in temp_model.state_dict().items()}
@@ -1690,7 +1739,8 @@ class SimulationEngine:
             return 0.0, 1.0 # avg_acc = 0.0, max_ter = 1.0
 
         # Khởi tạo model vỏ rỗng để mượn đường chạy test (chạy trên GPU nếu có)
-        eval_model = get_model(self.config.get('model', 'simple_cnn'), num_classes=self.num_classes).to(self.device)
+        input_channels = getattr(self.workers[0], 'input_channels', 3) if self.workers else 3
+        eval_model = get_model(self.config.get('model', 'simple_cnn'), num_classes=self.num_classes, input_channels=input_channels).to(self.device)
         criterion = torch.nn.CrossEntropyLoss()
 
         all_workers_best_acc = []

@@ -4,13 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 
-def get_model(model_name, num_classes=10, input_dim=None):
+def get_model(model_name, num_classes=10, input_channels=3, input_dim=None):
     """
     Factory function để lấy mô hình theo tên
     
     Args:
         model_name: Tên mô hình (resnet18, mobilenet_v2, vgg9, simple_cnn, resnet20, health_mlp)
         num_classes: Số lớp phân loại
+        input_channels: Số channels đầu vào (default: 3 cho RGB, 1 cho Grayscale)
         input_dim: Dimensão đầu vào (chỉ dùng cho health_mlp)
     """
     model_name = model_name.lower()
@@ -18,7 +19,7 @@ def get_model(model_name, num_classes=10, input_dim=None):
     if model_name == 'resnet18':
         model = models.resnet18(weights=None)
         
-        model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        model.conv1 = nn.Conv2d(input_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         model.maxpool = nn.Identity() # Bỏ maxpool đầu tiên
         
         model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -30,11 +31,11 @@ def get_model(model_name, num_classes=10, input_dim=None):
         model.classifier[1] = nn.Linear(model.last_channel, num_classes)
         return model
     elif model_name == 'vgg9':
-        return VGG9(num_classes=num_classes)
+        return VGG9(num_classes=num_classes, input_channels=input_channels)
     elif model_name == 'simple_cnn':
-        return SimpleCNN(num_classes=num_classes)
+        return SimpleCNN(num_classes=num_classes, input_channels=input_channels)
     elif model_name == 'resnet20':
-        return ResNet20(num_classes=num_classes)
+        return ResNet20(num_classes=num_classes, input_channels=input_channels)
     elif model_name == 'health_mlp':
         # Nếu input_dim không được chỉ định, dự đoán từ dataset
         if input_dim is None:
@@ -60,30 +61,36 @@ class SimpleCNN(nn.Module):
     #     x = F.relu(self.fc1(x))
     #     x = self.fc2(x)
     #     return x
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, input_channels=3):
         super(SimpleCNN, self).__init__()
-        # Chuyển từ 3 kênh (RGB) sang 1 kênh (Grayscale) cho MNIST
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3) 
+        # Accept flexible input channels (1 for Grayscale, 3 for RGB)
+        # Add padding=1 to preserve spatial dimensions
+        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, padding=1) 
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
-        # 64 channels * 5 * 5 (kích thước sau 2 lần pool) = 1600
-        self.fc1 = nn.Linear(64 * 5 * 5, 64) 
-        self.fc2 = nn.Linear(64, num_classes)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        # Use AdaptiveAvgPool2d to handle variable input sizes
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        # Flatten size: 64 channels
+        self.fc1 = nn.Linear(64, 128) 
+        self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 64 * 5 * 5)
+        # Adaptive pooling: [batch, 64, 1, 1]
+        x = self.adaptive_pool(x)
+        # Flatten: [batch, 64]
+        x = x.view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
 
 class VGG9(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, input_channels=3):
         super(VGG9, self).__init__()
         
         self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, 64, kernel_size=3, padding=1),
             nn.GroupNorm(8, 64), # 8 groups
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
@@ -107,13 +114,12 @@ class VGG9(nn.Module):
             nn.Conv2d(512, 512, kernel_size=3, padding=1),
             nn.GroupNorm(32, 512),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.AdaptiveAvgPool2d((1, 1))  # Add adaptive pooling for flexible input sizes
         )
         
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(512 * 2 * 2, 512),
-            nn.LayerNorm(512), # LayerNorm thay cho BatchNorm1d
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
             nn.ReLU(inplace=True),
             nn.Dropout(p=0.5),
             nn.Linear(512, 512),
@@ -171,12 +177,12 @@ class BasicBlock(nn.Module):
         return out
 
 class ResNet20(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, input_channels=3):
         super(ResNet20, self).__init__()
         self.in_planes = 16
 
         # Lớp Convolution đầu tiên
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(8, 16)
         
         # 3 cụm Residual Layers (Mỗi cụm 3 block)
