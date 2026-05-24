@@ -248,6 +248,48 @@ class AggregationAlgorithms:
             weighted_sum_model[k] = weighted_sum_model[k] / total_trust_score
             
         return weighted_sum_model
+
+    @staticmethod
+    def dfca(updates):
+        """
+        Hiện thực giải thuật DFCA cho môi trường baseline.
+
+        DFCA trong baseline được giả lập bằng một trung bình tích lũy tuần tự
+        (Sequential Running Average) trên các model updates, tương tự cách cập nhật
+        gossip DFCA khi không dùng cơ chế cluster trung gian.
+
+        Args:
+            updates (list[state_dict]): Danh sách các model updates.
+
+        Returns:
+            state_dict: Model tổng hợp sau DFCA.
+        """
+        if not updates:
+            return None
+
+        dfca_model = copy.deepcopy(updates[0])
+        # Chuyển các tham số float sang float32 để đảm bảo phép toán ổn định
+        for key in dfca_model.keys():
+            if dfca_model[key].is_floating_point():
+                dfca_model[key] = dfca_model[key].float().clone()
+            else:
+                dfca_model[key] = dfca_model[key].clone()
+
+        for idx, update in enumerate(updates[1:], start=1):
+            alpha = idx / (idx + 1.0)
+            beta = 1.0 / (idx + 1.0)
+
+            for key in dfca_model.keys():
+                if key not in update:
+                    continue
+
+                if dfca_model[key].is_floating_point():
+                    dfca_model[key] = alpha * dfca_model[key] + beta * update[key].float()
+                else:
+                    # Với các tham số không phải float, giữ nguyên giá trị từ model đầu tiên
+                    dfca_model[key] = dfca_model[key]
+
+        return dfca_model
     
     def ubar(own_state_dict, neighbor_updates, model_template, data_batch, criterion, device, rho=0.5):
         """

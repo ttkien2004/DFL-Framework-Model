@@ -58,6 +58,8 @@ class StandardDFLNode(WorkerNode):
             aggregated_model = AggregationAlgorithms.trimmed_mean(valid_updates)
         elif algo_name == 'FL_TRUST':
             aggregated_model = AggregationAlgorithms.fl_trust(valid_updates, server_update=my_update)
+        elif algo_name in ('DFCA', 'DFCA_BALANCE'):
+            aggregated_model = AggregationAlgorithms.dfca(valid_updates)
         elif algo_name == 'UBAR':
             # UBAR sử dụng GPU
             try:

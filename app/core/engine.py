@@ -254,6 +254,10 @@ class SimulationEngine:
                 't_prev': float('inf')
             }
             np.fill_diagonal(self.coco_state['A'], 0)
+
+        if algo_name in ('DFCA', 'DFCA_BALANCE'):
+            self._phase_baseline_clustering()
+
         print("   [Phase 1] Local Training...")
         
         for w in self.workers:
@@ -320,7 +324,40 @@ class SimulationEngine:
             "execution_time": execution_time,
             "latency_breakdown": self.logs["latency_breakdown"]
         }
-    
+
+    def _phase_baseline_clustering(self):
+        """
+        Baseline DFCA clustering: assign workers to 3 clusters by evaluating
+        loss against cluster centroid models.
+        """
+        num_clusters = 3
+        if not self.workers:
+            return
+
+        print(f"[Baseline DFCA] Clustering into {num_clusters} clusters by loss")
+
+        cluster_models = {}
+        for cid in range(num_clusters):
+            if cid < len(self.workers):
+                cluster_models[cid] = {
+                    k: v.clone() for k, v in self.workers[cid].model.state_dict().items()
+                }
+            else:
+                cluster_models[cid] = {
+                    k: v.clone() for k, v in cluster_models[0].items()
+                }
+
+        for w in self.workers:
+            w.join_cluster(cluster_models)
+            w.model.load_state_dict(cluster_models[w.cluster_id])
+            w.model = w.model.to(w.device)
+
+        cluster_counts = {cid: 0 for cid in cluster_models}
+        for w in self.workers:
+            cluster_counts[w.cluster_id] += 1
+
+        print(f"   -> Baseline cluster assignment: {cluster_counts}")
+
     def _run_round_proposed(self, round_id):
         """
         Thực thi toàn bộ quy trình 1 vòng (Round) gồm 5 pha.
