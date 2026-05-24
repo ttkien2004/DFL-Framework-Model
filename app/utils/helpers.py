@@ -4,7 +4,8 @@ import numpy as np
 import hashlib
 import json
 import copy
-
+import math
+import torch.nn as nn
 # --- 1. CHUYỂN ĐỔI DỮ LIỆU (SERIALIZATION) ---
 
 def model_to_json(state_dict):
@@ -46,10 +47,29 @@ def compute_model_hash(state_dict):
 
 # --- 3. TOÁN HỌC & AGGREGATION ---
 
+# def federated_averaging(models_list):
+#     """
+#     Thuật toán FedAvg: Tính trung bình cộng các tham số của nhiều model.
+#     Input: Danh sách các state_dict (dạng Tensor).
+#     """
+#     if not models_list:
+#         return None
+
+#     # Copy model đầu tiên làm khung
+#     avg_weights = copy.deepcopy(models_list[0])
+
+#     # Duyệt qua từng lớp (layer)
+#     for key in avg_weights.keys():
+#         # Lấy tham số của lớp này từ tất cả các model
+#         layer_updates = [model[key] for model in models_list]
+        
+#         # Tính trung bình (stack lại rồi mean theo chiều 0)
+#         avg_weights[key] = torch.stack(layer_updates).mean(dim=0)
+        
+#     return avg_weights
 def federated_averaging(models_list):
     """
     Thuật toán FedAvg: Tính trung bình cộng các tham số của nhiều model.
-    Input: Danh sách các state_dict (dạng Tensor).
     """
     if not models_list:
         return None
@@ -59,12 +79,14 @@ def federated_averaging(models_list):
 
     # Duyệt qua từng lớp (layer)
     for key in avg_weights.keys():
-        # Lấy tham số của lớp này từ tất cả các model
-        layer_updates = [model[key] for model in models_list]
+        # BẮT BUỘC: Ép tất cả tensor về CPU trước khi stack để an toàn tuyệt đối
+        layer_updates = [model[key].cpu() for model in models_list]
         
-        # Tính trung bình (stack lại rồi mean theo chiều 0)
-        avg_weights[key] = torch.stack(layer_updates).mean(dim=0)
-        
+        if layer_updates[0].is_floating_point():
+            avg_weights[key] = torch.stack(layer_updates).mean(dim=0).clone().detach()
+        else:
+            avg_weights[key] = layer_updates[0].clone().detach()
+            
     return avg_weights
 
 def compute_euclidean_distance(w1, w2):
@@ -79,3 +101,47 @@ def compute_euclidean_distance(w1, w2):
         distance += torch.sum(diff ** 2).item()
     
     return np.sqrt(distance)
+
+def compute_model_norm(state_dict):
+    """
+    Tính L2 Norm (Độ lớn vector) của toàn bộ model.
+    Dùng để so sánh "mềm" thay vì Hash SHA256.
+    """
+    total_norm_sq = 0.0
+    for key, tensor in state_dict.items():
+        # Tính bình phương L2 norm của từng layer và cộng dồn
+        # Chuyển về float để tránh overflow
+        norm = tensor.float().norm(2).item()
+        total_norm_sq += norm ** 2
+        
+    return math.sqrt(total_norm_sq)
+
+def sanitize_for_json(data):
+    """
+    Đệ quy duyệt qua dict/list và chuyển NaN/Inf thành null
+    """
+    if isinstance(data, dict):
+        return {k: sanitize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_for_json(v) for v in data]
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None # JSON sẽ hiểu là null
+    return data
+
+def get_model_size_mb(model):
+    """Tính kích thước model theo MB (bao gồm parameters và buffers)"""
+    param_size = 0
+    total_size = 0
+    if isinstance(model, dict):
+        for tensor in model.values():
+            total_size += tensor.nelement() * tensor.element_size()
+    elif isinstance(model, nn.Module):
+        for param in model.parameters():
+            total_size += param.nelement() * param.element_size()
+        buffer_size = 0
+        for buffer in model.buffers():
+            total_size += buffer.nelement() * buffer.element_size()
+    
+    size_mb = total_size / (1024 ** 2)
+    return size_mb

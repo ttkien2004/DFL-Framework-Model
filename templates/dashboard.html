@@ -1,137 +1,889 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>BCFL Simulation Dashboard</title>
+		<title>Hệ thống Giám sát BCFL</title>
 		<link
 			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
 			rel="stylesheet"
 		/>
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css"
+		/>
 		<style>
 			body {
 				padding: 20px;
-				background-color: #f8f9fa;
+				background-color: #f4f6f9;
 			}
 			.card {
-				box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+				box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+				border: none;
+				margin-bottom: 20px;
 			}
-			.status-badge {
-				font-weight: bold;
+			/* Màu sắc cho các chỉ số */
+			.text-acc {
+				color: #2ecc71;
+			}
+			.text-loss {
+				color: #e74c3c;
+			}
+			.text-dist {
+				color: #9b59b6;
+			}
+			.text-time {
+				color: #3498db;
+			}
+
+			/* Style cho Tabs */
+			.nav-tabs .nav-link {
+				color: #495057;
+				font-weight: 600;
+			}
+			.nav-tabs .nav-link.active {
+				color: #0d6efd;
+				border-bottom: 3px solid #0d6efd;
+			}
+			.table-attack thead {
+				border-top: 3px solid #dc3545;
 			}
 		</style>
 	</head>
 	<body>
-		<div class="container">
-			<div class="text-center mb-4">
-				<h1 class="display-6">BCFL CoCo Cluster Dashboard</h1>
-				<p class="text-muted">
-					Theo dõi tiến trình huấn luyện theo thời gian thực
-				</p>
+		<div class="container-fluid">
+			<div class="d-flex justify-content-between align-items-center mb-4">
+				<div>
+					<h2 class="mb-0">BCFL Live Monitor</h2>
+					<small class="text-muted"
+						>Federated Learning over Blockchain Consensus</small
+					>
+				</div>
+				<div>
+					<span id="scenarioBadge" class="badge bg-secondary fs-6"
+						>Loading...</span
+					>
+					<span id="statusBadge" class="badge bg-warning text-dark fs-6"
+						>Waiting...</span
+					>
+				</div>
 			</div>
 
-			<div class="row mb-4 text-center">
-				<div class="col-md-4">
-					<div class="card p-3 border-primary">
-						<h5>Vòng hiện tại</h5>
-						<h2 id="currentRound" class="text-primary">0</h2>
+			<div class="row text-center">
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Round</small>
+						<h3 id="valRound">0</h3>
 					</div>
 				</div>
-				<div class="col-md-4">
-					<div class="card p-3 border-success">
-						<h5>Độ chính xác (Accuracy)</h5>
-						<h2 id="currentAcc" class="text-success">0%</h2>
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Global Accuracy</small>
+						<h3 id="valAcc" class="text-acc">0%</h3>
 					</div>
 				</div>
-				<div class="col-md-4">
-					<div class="card p-3 border-danger">
-						<h5>Độ mất mát (Loss)</h5>
-						<h2 id="currentLoss" class="text-danger">0</h2>
+				<div class="col-md-2">
+					<div class="card p-3">
+						<small class="text-muted">Global Loss</small>
+						<h3 id="valLoss" class="text-loss">-</h3>
+					</div>
+				</div>
+				<div class="col-md-3">
+					<div class="card p-3">
+						<small class="text-muted">Consensus Distance</small>
+						<h3 id="valDist" class="text-dist">-</h3>
+					</div>
+				</div>
+				<div class="col-md-3">
+					<div class="card p-3">
+						<small class="text-muted">Avg Latency</small>
+						<h3 id="valTime" class="text-time">-</h3>
 					</div>
 				</div>
 			</div>
 
 			<div class="card">
 				<div
-					class="card-header bg-dark text-white d-flex justify-content-between align-items-center"
+					class="card-header bg-white pb-0 d-flex justify-content-between align-items-center"
 				>
-					<span>Lịch sử Huấn luyện</span>
-					<span class="badge bg-warning text-dark" id="statusBadge"
-						>Waiting...</span
+					<ul
+						class="nav nav-tabs border-bottom-0"
+						id="monitorTabs"
+						role="tablist"
 					>
+						<li class="nav-item" role="presentation">
+							<button
+								class="nav-link active"
+								id="general-tab"
+								data-bs-toggle="tab"
+								data-bs-target="#general-pane"
+								type="button"
+								role="tab"
+							>
+								<i class="bi bi-bar-chart-fill me-2"></i>Tổng quan (General
+								Metrics)
+							</button>
+						</li>
+						<li class="nav-item" role="presentation">
+							<button
+								class="nav-link text-danger"
+								id="attack-tab"
+								data-bs-toggle="tab"
+								data-bs-target="#attack-pane"
+								type="button"
+								role="tab"
+							>
+								<i class="bi bi-shield-exclamation me-2"></i>Phân tích Tấn công
+								(Attack Metrics)
+							</button>
+						</li>
+					</ul>
+					<div>
+						<button
+							class="btn btn-sm btn-light text-danger fw-bold"
+							onclick="exportToExcel()"
+						>
+							<i class="bi bi-file-earmark-excel-fill me-1"></i>Xuất Excel
+						</button>
+					</div>
 				</div>
 				<div class="card-body p-0">
-					<div
-						class="table-responsive"
-						style="max-height: 500px; overflow-y: auto"
-					>
-						<table class="table table-striped table-hover mb-0 text-center">
-							<thead class="table-dark sticky-top">
-								<tr>
-									<th>Round</th>
-									<th>Accuracy (%)</th>
-									<th>Loss</th>
-									<th>Block Height</th>
-								</tr>
-							</thead>
-							<tbody id="metricsBody"></tbody>
-						</table>
+					<div class="tab-content" id="monitorTabsContent">
+						<div
+							class="tab-pane fade show active"
+							id="general-pane"
+							role="tabpanel"
+						>
+							<div
+								class="table-responsive"
+								style="max-height: 600px; overflow-y: auto"
+							>
+								<table class="table table-hover mb-0 text-center align-middle">
+									<thead class="table-light sticky-top">
+										<tr>
+											<th>Round</th>
+											<th>Global Acc</th>
+											<th>Global Loss</th>
+											<th>Consensus Dist</th>
+											<th>Latency (s)</th>
+											<th>Comm Cost (MB)</th>
+											<th>Chi tiết</th>
+										</tr>
+									</thead>
+									<tbody id="generalMetricsBody"></tbody>
+								</table>
+							</div>
+						</div>
+
+						<div class="tab-pane fade" id="attack-pane" role="tabpanel">
+							<div
+								class="table-responsive"
+								style="max-height: 600px; overflow-y: auto"
+							>
+								<table
+									class="table table-hover mb-0 text-center align-middle table-attack"
+								>
+									<thead class="table-light sticky-top">
+										<tr>
+											<th>Round</th>
+											<th>TPR (True Positive Rate)</th>
+											<th>FPR (False Positive Rate)</th>
+											<th>ASR (Success Rate)</th>
+											<th>F1-Score</th>
+											<th>Trạng thái</th>
+											<th>Chi tiết</th>
+										</tr>
+									</thead>
+									<tbody id="attackMetricsBody"></tbody>
+								</table>
+							</div>
+						</div>
 					</div>
 				</div>
 			</div>
 		</div>
 
+		<div
+			class="modal fade"
+			id="roundDetailModal"
+			tabindex="-1"
+			aria-hidden="true"
+		>
+			<div class="modal-dialog modal-lg">
+				<div class="modal-content">
+					<div class="modal-header bg-primary text-white">
+						<h5 class="modal-title">
+							Chi tiết Vòng <span id="modalRoundId">#</span>
+						</h5>
+						<button
+							type="button"
+							class="btn-close btn-close-white"
+							data-bs-dismiss="modal"
+						></button>
+					</div>
+					<div class="modal-body">
+						<h6 class="border-bottom pb-2 text-primary">
+							<i class="bi bi-person-badge-fill me-2"></i>Vai trò & Ủy ban
+						</h6>
+						<div class="row mb-3">
+							<div class="col-md-4">
+								<div class="card bg-light border-warning mb-2">
+									<div class="card-body text-center p-2">
+										<small class="text-muted d-block">Proposer</small>
+										<strong class="fs-5 text-warning" id="modalProposer"
+											>Node ?</strong
+										>
+									</div>
+								</div>
+							</div>
+							<div class="col-md-8">
+								<div class="card bg-light border-info mb-2">
+									<div class="card-body p-2">
+										<small class="text-muted d-block mb-1"
+											>Committee Members</small
+										>
+										<div id="modalCommittee"></div>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<h6 class="border-bottom pb-2 text-success mt-4">
+							<i class="bi bi-diagram-3-fill me-2"></i>Phân bố Cluster
+						</h6>
+						<div class="row" id="modalClusters"></div>
+
+						<h6 class="border-bottom pb-2 text-dark mt-4">
+							<i class="bi bi-star-fill me-2"></i>Điểm Uy tín
+						</h6>
+						<div
+							class="table-responsive"
+							style="max-height: 200px; overflow-y: auto"
+						>
+							<table
+								class="table table-sm table-striped table-hover text-center"
+							>
+								<thead class="table-light sticky-top">
+									<tr>
+										<th>Node ID</th>
+										<th>Reputation</th>
+										<th>Role Status</th>
+									</tr>
+								</thead>
+								<tbody id="modalReputationBody"></tbody>
+							</table>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button
+							type="button"
+							class="btn btn-secondary"
+							data-bs-dismiss="modal"
+						>
+							Đóng
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="row mb-4 d-none" id="attackMetricsRow">
+			<div class="col-12">
+				<div class="card border-danger">
+					<div
+						class="card-header bg-danger text-white d-flex justify-content-between align-items-center"
+					>
+						<h5 class="mb-0">
+							<i class="bi bi-exclamation-triangle-fill me-2"></i>Chỉ số Tấn
+							công (<span id="attackTypeLabel"></span>)
+						</h5>
+						<button
+							class="btn btn-sm btn-light text-danger fw-bold"
+							onclick="exportToExcel()"
+						>
+							<i class="bi bi-file-earmark-excel-fill me-1"></i>Xuất Excel
+						</button>
+					</div>
+					<div class="card-body">
+						<div class="row text-center" id="attackMetricsContainer"></div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+		<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+
 		<script>
+			let globalHistory = null;
+
 			async function updateDashboard() {
 				try {
-					// 1. Gọi API lấy dữ liệu
 					const response = await fetch("/get_metrics");
 					const data = await response.json();
 
-					// Kiểm tra nếu chưa có dữ liệu
-					if (!data.rounds || data.rounds.length === 0) {
-						document.getElementById("statusBadge").innerText = "No Data";
+					if (
+						!data.history ||
+						!data.history.rounds ||
+						data.history.rounds.length === 0
+					) {
+						document.getElementById("statusBadge").innerText =
+							"Waiting for Data...";
+						document.getElementById("statusBadge").className =
+							"badge bg-warning text-dark";
+						document.getElementById("valRound").innerText = "0";
+						document.getElementById("generalMetricsBody").innerHTML = "";
+						document.getElementById("attackMetricsBody").innerHTML = "";
 						return;
 					}
 
-					// 2. Cập nhật Thống kê nhanh (Lấy phần tử cuối cùng)
-					const lastIdx = data.rounds.length - 1;
-					document.getElementById("currentRound").innerText =
-						data.rounds[lastIdx];
-					document.getElementById("currentAcc").innerText =
-						data.accuracy[lastIdx] + "%";
-					document.getElementById("currentLoss").innerText = data.loss[lastIdx];
-					document.getElementById("statusBadge").innerText = "Live Updating";
+					const hist = data.history;
+					globalHistory = hist;
+					console.log(globalHistory);
 
-					// 3. Cập nhật Bảng (Xóa cũ điền mới hoặc chèn thêm)
-					// Ở đây ta xóa đi render lại cho đơn giản
-					const tbody = document.getElementById("metricsBody");
-					tbody.innerHTML = "";
+					// Cập nhật trạng thái
+					document.getElementById("statusBadge").innerText = "Live Monitoring";
+					document.getElementById("statusBadge").className =
+						"badge bg-success animate-pulse";
 
-					// Duyệt ngược để vòng mới nhất hiện lên trên đầu
+					const lastIdx = hist.rounds.length - 1;
+					updateAttackMetrics(hist, lastIdx);
+					// Xác định Scenario Badge
+					const hasAttackMetrics =
+						hist.tpr && hist.tpr.some((v) => v !== null && v !== undefined);
+					const scenarioBadge = document.getElementById("scenarioBadge");
+					if (hasAttackMetrics) {
+						scenarioBadge.innerText = "ATTACK SCENARIO";
+						scenarioBadge.className = "badge bg-danger fs-6";
+					} else {
+						scenarioBadge.innerText = "BASELINE SCENARIO";
+						scenarioBadge.className = "badge bg-primary fs-6";
+					}
+
+					// Helper format
+					const fmt = (val, fixed = 4) => {
+						if (val === null || val === undefined) return "NaN"; // Yêu cầu trả về NaN nếu không có
+						return Number(val).toFixed(fixed);
+					};
+
+					// Helper riêng cho trường hợp null nhưng muốn hiển thị "-" thay vì NaN ở top cards cho đẹp
+					const fmtCard = (val, fixed = 4) => {
+						if (val === null || val === undefined) return "-";
+						return Number(val).toFixed(fixed);
+					};
+
+					// --- CẬP NHẬT TOP CARDS ---
+					document.getElementById("valRound").innerText = hist.rounds[lastIdx];
+					document.getElementById("valAcc").innerText =
+						(hist.avg_acc[lastIdx] * 100).toFixed(2) + "%";
+
+					// Sử dụng fmtCard để hiển thị đẹp hơn ở Cards
+					document.getElementById("valLoss").innerText = hist.global_loss
+						? fmtCard(hist.global_loss[lastIdx])
+						: "-";
+					document.getElementById("valDist").innerText = hist.consensus_distance
+						? fmtCard(hist.consensus_distance[lastIdx], 2)
+						: "-";
+					document.getElementById("valTime").innerText = hist.execution_time
+						? fmtCard(hist.execution_time[lastIdx], 2) + "s"
+						: "-";
+
+					// --- RENDER TABLES ---
+					const genBody = document.getElementById("generalMetricsBody");
+					const attBody = document.getElementById("attackMetricsBody");
+
+					genBody.innerHTML = "";
+					attBody.innerHTML = "";
+
+					// Duyệt ngược (Mới nhất lên đầu)
 					for (let i = lastIdx; i >= 0; i--) {
-						const row = `
-                    <tr>
-                        <td><strong>${data.rounds[i]}</strong></td>
-                        <td><span class="badge bg-success">${data.accuracy[i]}%</span></td>
-                        <td>${data.loss[i]}</td>
-                        <td>#${data.blockchain_height[i]}</td>
-                    </tr>
-                `;
-						tbody.innerHTML += row;
+						// 1. Dữ liệu General Tab
+						let global_loss = hist.global_loss
+							? fmt(hist.global_loss[i])
+							: "NaN";
+						let consensus_distance = hist.consensus_distance
+							? fmt(hist.consensus_distance[i])
+							: "NaN";
+						let execution_time = hist.execution_time
+							? fmt(hist.execution_time[i])
+							: "NaN";
+						let comm =
+							hist.comm_cost && hist.comm_cost[i] !== undefined
+								? fmt(hist.comm_cost[i], 1)
+								: "0";
+
+						// Nút xem chi tiết (dùng chung)
+						const actionBtn = `
+			                         <td>
+			                             <button class="btn btn-sm btn-outline-primary" onclick="showRoundDetails(${i})">
+			                                 <i class="bi bi-eye"></i> Xem
+			                             </button>
+			                         </td>`;
+
+						const genRow = `
+			                         <tr>
+			                             <td><strong>#${hist.rounds[i]}</strong></td>
+			                             <td><span class="badge bg-success">${(hist.avg_acc[i] * 100).toFixed(2)}%</span></td>
+			                             <td>${global_loss}</td>
+			                             <td>${consensus_distance}</td>
+			                             <td>${execution_time}</td>
+			                             <td>${comm}</td>
+			                             ${actionBtn}
+			                         </tr>
+			                     `;
+						genBody.innerHTML += genRow;
+
+						// 2. Dữ liệu Attack Tab
+						let tpr =
+							hist.tpr && hist.tpr[i] !== undefined && hist.tpr[i] !== null
+								? Number(hist.tpr[i]).toFixed(4)
+								: "NaN";
+						let fpr =
+							hist.fpr && hist.fpr[i] !== undefined && hist.fpr[i] !== null
+								? Number(hist.fpr[i]).toFixed(4)
+								: "NaN";
+
+						// Logic hiển thị trạng thái
+						let statusBadge = '<span class="badge bg-secondary">Unknown</span>';
+						if (tpr === "NaN") {
+							statusBadge =
+								'<span class="badge bg-light text-muted border">No Data</span>';
+						} else {
+							statusBadge = '<span class="badge bg-danger">Attacked</span>';
+						}
+						// --- THÊM LOGIC LẤY ASR VÀ F1 ---
+						// Kiểm tra xem backend có gửi 'asr' và 'f1_score' không, nếu không thì hiện NaN
+						let asr =
+							hist.asr && hist.asr[i] != null
+								? Number(hist.asr[i]).toFixed(4)
+								: "NaN";
+						let f1 =
+							hist.f1_score && hist.f1_score[i] != null
+								? Number(hist.f1_score[i]).toFixed(4)
+								: "NaN";
+
+						const attRow = `
+			                         <tr>
+			                             <td><strong>#${hist.rounds[i]}</strong></td>
+			                             <td class="text-danger fw-bold">${tpr}</td>
+			                             <td class="text-warning fw-bold">${fpr}</td>
+								<td class="text-primary fw-bold">${asr}</td>
+			     						<td class="text-dark fw-bold">${f1}</td>
+			                             <td>${statusBadge}</td>
+			                             ${actionBtn}
+			                         </tr>
+			                     `;
+						attBody.innerHTML += attRow;
 					}
 				} catch (error) {
-					console.error("Lỗi kết nối:", error);
-					document.getElementById("statusBadge").innerText = "Connection Error";
-					document.getElementById("statusBadge").className = "badge bg-danger";
+					console.error("Dashboard Error:", error);
 				}
 			}
 
-			// Gọi hàm cập nhật mỗi 2 giây (2000ms)
+			// --- HÀM CHI TIẾT VÒNG (MODAL) ---
+			function showRoundDetails(index) {
+				if (!globalHistory) return;
+				const h = globalHistory;
+
+				document.getElementById("modalRoundId").innerText = h.rounds[index];
+
+				// Role Logic (kiểm tra an toàn mảng lồng nhau)
+				let roles = { proposer: "N/A", committee: [] };
+
+				if (h.roles && h.roles[index]) {
+					// Nếu dữ liệu được lưu dạng role trực tiếp hoặc mảng lồng
+					roles = h.roles[index].proposer
+						? h.roles[index]
+						: h.roles[index][0] || roles;
+					// Fix cho trường hợp dữ liệu backend của bạn có thể trả về array lồng hoặc object
+					// Code cũ của bạn: h.roles[index][index-1] có vẻ rủi ro, tôi sửa lại an toàn hơn
+					// Giả sử API trả về mảng role tương ứng index
+					roles = h.roles[index][index];
+				}
+
+				document.getElementById("modalProposer").innerText =
+					`Node ${roles.proposer}`;
+				const commContainer = document.getElementById("modalCommittee");
+				commContainer.innerHTML = roles.committee
+					.map(
+						(id) =>
+							`<span class="badge bg-info text-dark me-1">Node ${id}</span>`,
+					)
+					.join("");
+
+				// Cluster Logic
+				const clusters = h.cluster_assignments
+					? h.cluster_assignments[index]
+					: {};
+
+				const clusterDiv = document.getElementById("modalClusters");
+				clusterDiv.innerHTML = "";
+
+				for (const [cid, members] of Object.entries(clusters)) {
+					for (const [cluster_id, mem] of Object.entries(members)) {
+						const memberBadges = mem
+							.map((m) => `<span class="badge bg-secondary me-1">${m}</span>`)
+							.join("");
+						const col = `
+			                     <div class="col-md-6 mb-3">
+			                         <div class="card h-100">
+			                             <div class="card-header py-1 fw-bold bg-light">Cluster ${cluster_id}</div>
+			                             <div class="card-body p-2">${memberBadges}</div>
+			                         </div>
+			                     </div>`;
+						clusterDiv.innerHTML += col;
+					}
+				}
+
+				// Reputation Logic
+				const rep = h.reputation ? h.reputation[index] : {};
+				const repBody = document.getElementById("modalReputationBody");
+				repBody.innerHTML = "";
+
+				Object.keys(rep)
+					.sort((a, b) => parseInt(a) - parseInt(b))
+					.forEach((nodeId) => {
+						const score = rep[nodeId];
+						let roleBadge =
+							'<span class="badge bg-light text-dark border">Worker</span>';
+
+						if (nodeId == roles.proposer)
+							roleBadge =
+								'<span class="badge bg-warning text-dark">Proposer</span>';
+						else if (roles.committee.includes(parseInt(nodeId)))
+							roleBadge =
+								'<span class="badge bg-info text-dark">Committee</span>';
+
+						let scoreClass =
+							score < 50 ? "text-danger fw-bold" : "text-success";
+						const row = `<tr><td>Node ${nodeId}</td><td class="${scoreClass}">${score.toFixed(2)}</td><td>${roleBadge}</td></tr>`;
+						repBody.innerHTML += row;
+					});
+
+				const modal = new bootstrap.Modal(
+					document.getElementById("roundDetailModal"),
+				);
+				modal.show();
+			}
+
+			updateDashboard();
 			setInterval(updateDashboard, 2000);
 
-			// Gọi ngay lần đầu khi tải trang
-			updateDashboard();
+			function updateAttackMetrics(hist, index) {
+				const container = document.getElementById("attackMetricsContainer");
+				const rowDiv = document.getElementById("attackMetricsRow");
+				const labelSpan = document.getElementById("attackTypeLabel");
+
+				// 1. Xác định Attack Type
+				// Ưu tiên lấy từ mảng attack_type nếu có, nếu không đoán dựa trên system_mode hoặc metrics
+				let attackType = "NONE";
+				if (hist.attack_type && hist.attack_type[index]) {
+					attackType = hist.attack_type[index];
+				} else {
+					// Fallback Logic: Đoán dựa trên metrics có dữ liệu
+					if (hist.avg_mse && hist.avg_mse[index] > 0)
+						attackType = "GAUSSIAN_MODEL_POISONING";
+					else if (hist.asr && hist.asr[index] > 0)
+						attackType = "LABEL_FLIPPING";
+					else if (hist.tpr && hist.tpr[index] > 0) attackType = "BACKDOOR";
+				}
+
+				// Nếu vẫn là NONE hoặc BASELINE -> Ẩn
+				if (attackType === "NONE" || attackType === "BASELINE") {
+					rowDiv.classList.add("d-none");
+					return;
+				}
+
+				// Hiển thị
+				rowDiv.classList.remove("d-none");
+				labelSpan.innerText = attackType;
+				container.innerHTML = "";
+
+				let html = "";
+
+				// 2. Render Metrics dựa trên Type
+				// Lưu ý: Dùng hist.key[index] để lấy giá trị
+				console.log(attackType, "???");
+				if (attackType === "LABEL_FLIPPING") {
+					html += createMetricCard(
+						"ASR (Success Rate)",
+						fmtPercent(hist.asr[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Source Recall",
+						fmtPercent(hist.src_recall[index]),
+						"text-warning",
+					);
+					html += createMetricCard(
+						"Target Precision",
+						fmtPercent(hist.tgt_precision[index]),
+						"text-primary",
+					);
+				} else if (
+					["GAUSSIAN", "MODEL_POISONING", "GAUSSIAN_MODEL_POISONING"].includes(
+						attackType,
+					)
+				) {
+					html += createMetricCard(
+						"Avg MSE",
+						fmtVal(hist.avg_mse[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Poisoned Loss",
+						fmtVal(hist.avg_loss[index]),
+						"text-secondary",
+					);
+				} else if (attackType === "BACKDOOR") {
+					html += createMetricCard(
+						"Backdoor ASR",
+						fmtPercent(hist.asr[index]),
+						"text-danger",
+					);
+					html += createMetricCard(
+						"Clean Accuracy",
+						fmtPercent(hist.avg_acc[index]),
+						"text-success",
+					);
+				}
+
+				container.innerHTML = html;
+			}
+
+			// Helpers nhỏ cho gọn code
+			const fmtPercent = (val) =>
+				val != null ? (val * 100).toFixed(2) + "%" : "N/A";
+			const fmtVal = (val) => (val != null ? val.toFixed(4) : "N/A");
+
+			function createMetricCard(title, value, colorClass) {
+				return `
+			     <div class="col-md-4 mb-2">
+			         <div class="p-3 border rounded bg-light h-100 d-flex flex-column justify-content-center">
+			             <div class="text-muted small text-uppercase fw-bold mb-1">${title}</div>
+			             <div class="h3 mb-0 ${colorClass}">${value}</div>
+			         </div>
+			     </div>
+			 `;
+			}
+			function exportToExcel() {
+				// 1. Kiểm tra dữ liệu				
+				if (
+					!globalHistory ||
+					!globalHistory.rounds ||
+					globalHistory.rounds.length === 0
+				) {
+					alert(
+						"Chưa có dữ liệu để xuất! Vui lòng đợi chạy xong ít nhất 1 vòng.",
+					);
+					return;
+				}
+
+				const h = globalHistory;
+				const count = h.rounds.length;
+				const lastIdx = count - 1; // <--- FIX 1: Khai báo biến thiếu
+
+				// ---------------------------------------------------------
+				// A. XỬ LÝ TÊN FILE
+				// ---------------------------------------------------------
+				const urlParams = new URLSearchParams(window.location.search);
+				const numNodes = urlParams.get("nodes") || "unknown";
+				const plannedRounds = urlParams.get("rounds") || count;
+
+				let algoName = "Unknown";
+				if (h.system_mode && h.system_mode[lastIdx])
+					algoName = h.system_mode[lastIdx];
+
+				// Xác định kịch bản tấn công
+				let attackName = "Normal";
+				let isAttackScenario = false;
+
+				// Ưu tiên lấy từ field attack_type
+				if (
+					h.attack_type &&
+					h.attack_type[lastIdx] &&
+					h.attack_type[lastIdx] !== "NONE"
+				) {
+					attackName = h.attack_type[lastIdx];
+					isAttackScenario = true;
+				}
+				// Fallback: Đoán dựa trên metrics nếu attack_type chưa cập nhật
+				else if (h.avg_mse && h.avg_mse[lastIdx] > 0) {
+					attackName = "Gauss";
+					isAttackScenario = true;
+				} else if (h.asr && h.asr[lastIdx] > 0) {
+					attackName = "LabelFlipping";
+					isAttackScenario = true;
+				}
+
+				const timestamp = new Date()
+					.toISOString()
+					.replace(/[:.]/g, "-")
+					.slice(0, 19);
+				let fileName = "";
+
+				if (isAttackScenario) {
+					fileName = `bcfl_metrics_${timestamp}_${attackName}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+				} else {
+					console.log("Hello word")
+					fileName = `bcfl_metrics_${timestamp}_${numNodes}nodes_${plannedRounds}rounds_${algoName}.csv`;
+				}
+
+				// ---------------------------------------------------------
+				// B. ĐỊNH NGHĨA CẤU TRÚC CỘT (Đảm bảo Header & Data luôn khớp)
+				// ---------------------------------------------------------
+
+				// Helper: Hàm bọc dấu ngoặc kép để tránh lỗi CSV khi dữ liệu có dấu phẩy
+				const safeStr = (val) => {
+					if (val === null || val === undefined) return "";
+					const str = String(val);
+					// Nếu có dấu phẩy, xuống dòng hoặc ngoặc kép thì phải bọc lại
+					if (str.includes(",") || str.includes("\n") || str.includes('"')) {
+						return `"${str.replace(/"/g, '""')}"`;
+					}
+					return str;
+				};
+
+				// Danh sách các cột cơ bản
+				let columns = [
+					{ header: "Round", val: (i) => h.rounds[i] },
+					{ header: "Accuracy", val: (i) => (h.avg_acc ? h.avg_acc[i] : "") },
+					{
+						header: "Loss",
+						val: (i) =>
+							h.global_loss
+								? h.global_loss[i]
+								: h.avg_loss
+									? h.avg_loss[i]
+									: "",
+					},
+					{
+						header: "Consensus Dist",
+						val: (i) =>
+							h.consensus_distance
+								? h.consensus_distance[i]
+								: h.consensus_error
+									? h.consensus_error[i]
+									: "",
+					},
+					{
+						header: "Comm Traffic (MB)",
+						val: (i) =>
+							h.comm_traffic_mb && h.comm_traffic_mb[i] != null
+								? h.comm_traffic_mb[i]
+								: "0",
+					},
+					{
+						header: "Comm Cost",
+						val: (i) => (h.comm_cost ? h.comm_cost[i] : "0"),
+					},
+					{
+						header: "Latency (s)",
+						val: (i) =>
+							h.execution_time
+								? h.execution_time[i]
+								: h.latency
+									? h.latency[i]
+									: "",
+					},
+					{
+						header: "System Mode",
+						val: (i) => (h.system_mode ? h.system_mode[i] : "BASELINE"),
+					},
+				];
+
+				// Kiểm tra dữ liệu tấn công để thêm cột động
+				const hasMSE = h.avg_mse && h.avg_mse.some((v) => v != null && v !== 0);
+				const hasASR = h.asr && h.asr.some((v) => v != null && v !== 0);
+				const hasRec =
+					h.src_recall && h.src_recall.some((v) => v != null && v !== 0);
+				const hasPre =
+					h.tgt_precision && h.tgt_precision.some((v) => v != null && v !== 0);
+				const hasTPR = h.tpr && h.tpr.some((v) => v != null && v !== 0);
+				const hasMIA =
+					h.privacy_attack_acc && h.privacy_attack_acc.some((v) => v != null);
+				const hasGIA = h.recon_mse && h.recon_mse.some((v) => v != null);
+
+				if (hasMSE) {
+					columns.push({
+						header: "Avg MSE",
+						val: (i) => (h.avg_mse ? h.avg_mse[i] : ""),
+					});
+					columns.push({
+						header: "Poisoned Loss",
+						val: (i) => (h.avg_loss ? h.avg_loss[i] : ""),
+					});
+				}
+				if (hasASR) {
+					columns.push({ header: "ASR", val: (i) => (h.asr ? h.asr[i] : "") });
+					columns.push({
+						header: "Clean Acc",
+						val: (i) => (h.clean_acc ? h.clean_acc[i] : ""),
+					});
+				}
+				if (hasRec)
+					columns.push({
+						header: "Src Recall",
+						val: (i) => (h.src_recall ? h.src_recall[i] : ""),
+					});
+				if (hasPre)
+					columns.push({
+						header: "Tgt Precision",
+						val: (i) => (h.tgt_precision ? h.tgt_precision[i] : ""),
+					});
+				if (hasTPR) {
+					columns.push({ header: "TPR", val: (i) => (h.tpr ? h.tpr[i] : "") });
+					columns.push({ header: "FPR", val: (i) => (h.fpr ? h.fpr[i] : "") });
+				}
+				if (hasMIA) {
+					columns.push({
+						header: "MIA Attack Acc",
+						val: (i) => (h.privacy_attack_acc ? h.privacy_attack_acc[i] : ""),
+					});
+					columns.push({
+						header: "MIA AUC",
+						val: (i) => (h.privacy_auc ? h.privacy_auc[i] : ""),
+					});
+					columns.push({
+						header: "MIA Advantage",
+						val: (i) => (h.privacy_advantage ? h.privacy_advantage[i] : ""),
+					});
+				}
+
+				if (hasGIA) {
+					columns.push({
+						header: "GIA MSE (Recon)",
+						val: (i) => (h.recon_mse ? h.recon_mse[i] : ""),
+					});
+					columns.push({
+						header: "GIA PSNR (dB)",
+						val: (i) => (h.recon_psnr ? h.recon_psnr[i] : ""),
+					});
+				}
+				// ---------------------------------------------------------
+				// C. TẠO NỘI DUNG CSV
+				// ---------------------------------------------------------
+				let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+
+				// 1. Ghi Header
+				csvContent +=
+					columns.map((col) => safeStr(col.header)).join(",") + "\r\n";
+
+				// 2. Ghi Data
+				for (let i = 0; i < count; i++) {
+					let rowData = columns.map((col) => safeStr(col.val(i)));
+					csvContent += rowData.join(",") + "\r\n";
+				}
+
+				// 3. Tải file
+				const encodedUri = encodeURI(csvContent);
+				const link = document.createElement("a");
+				link.setAttribute("href", encodedUri);
+				link.setAttribute("download", fileName);
+
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			}
 		</script>
 	</body>
 </html>

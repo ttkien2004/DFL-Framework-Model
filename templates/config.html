@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="vi">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Cấu hình Hệ thống BCFL</title>
+		<link
+			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+			rel="stylesheet"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css"
+		/>
+		<style>
+			body {
+				background-color: #f4f6f9;
+				padding-top: 30px;
+			}
+			.config-card {
+				box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+				border: none;
+				border-radius: 10px;
+			}
+			.nav-tabs .nav-link {
+				color: #495057;
+				font-weight: 600;
+			}
+			.nav-tabs .nav-link.active {
+				color: #0d6efd;
+				border-top: 3px solid #0d6efd;
+			}
+			.form-section-title {
+				font-size: 0.9rem;
+				text-transform: uppercase;
+				letter-spacing: 1px;
+				color: #6c757d;
+				margin-top: 20px;
+				margin-bottom: 10px;
+				font-weight: 700;
+				border-bottom: 1px solid #dee2e6;
+				padding-bottom: 5px;
+			}
+			.help-text {
+				font-size: 0.8rem;
+				color: #888;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container mb-5">
+			<div class="row justify-content-center">
+				<div class="col-lg-10">
+					<div class="text-center mb-4">
+						<h2 class="fw-bold">BCFL Configuration Center</h2>
+						<p class="text-muted">
+							Thiết lập tham số môi trường huấn luyện Federated Learning
+						</p>
+					</div>
+
+					<div class="card config-card overflow-hidden">
+						<div class="card-header bg-white p-0">
+							<ul class="nav nav-tabs nav-fill" id="configTabs" role="tablist">
+								<li class="nav-item" role="presentation">
+									<button
+										class="nav-link active py-3"
+										id="baseline-tab"
+										data-bs-toggle="tab"
+										data-bs-target="#baseline-pane"
+										type="button"
+										role="tab"
+									>
+										<i class="bi bi-shield-check me-2"></i>Kịch bản 1: Baseline
+										(No Attack)
+									</button>
+								</li>
+								<li class="nav-item" role="presentation">
+									<button
+										class="nav-link py-3 text-danger"
+										id="attack-tab"
+										data-bs-toggle="tab"
+										data-bs-target="#attack-pane"
+										type="button"
+										role="tab"
+									>
+										<i class="bi bi-virus me-2"></i>Kịch bản 2: Adversarial
+										(Attack)
+									</button>
+								</li>
+							</ul>
+						</div>
+
+						<div class="card-body p-4">
+							<div class="tab-content" id="configTabsContent">
+								<div
+									class="tab-pane fade show active"
+									id="baseline-pane"
+									role="tabpanel"
+								>
+									<form id="baselineForm">
+										<input type="hidden" name="scenario" value="1" />
+
+										<div class="form-section-title">
+											1. Chế độ Hệ thống (System Architecture)
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label fw-bold"
+													>System Mode (Cơ chế Đồng thuận)</label
+												>
+												<select
+													class="form-select"
+													id="baselineSystemMode"
+													name="system_mode"
+												>
+													<option value="PROPOSED" selected>
+														✨ Mô hình Đề xuất (CoCo/BCFL - Clustering)
+													</option>
+													<option value="BASELINE">
+														🛡️ DFL Truyền thống (Baseline)
+													</option>
+												</select>
+
+												<div class="help-text mt-1">
+													Chọn giữa kiến trúc đề xuất hoặc các giải thuật DFL
+													tiêu chuẩn để so sánh.
+												</div>
+											</div>
+											<div class="col-md-6 d-none" id="baselineAlgorithmGroup">
+												<label class="form-label"> Baseline Algorithm </label>
+												<select
+													class="form-select"
+													name="aggregation_algorithm"
+												>
+													<option value="FED_AVG">FedAvg (Cơ bản)</option>
+													<option value="CoCo">
+														CoCo (Compression Consensus - Baseline)
+													</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											2. Dữ liệu & Mô hình (Data & Model)
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Dataset</label>
+												<select class="form-select" name="dataset">
+													<option value="mnist" selected>
+														MNIST (Chữ viết tay)
+													</option>
+													<option value="fashion_mnist">Fashion MNIST</option>
+													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Model Architecture</label>
+												<select class="form-select" name="model">
+													<option value="simple_cnn" selected>
+														Simple CNN (LeNet-5 variant)
+													</option>
+													<option value="mlp">
+														MLP (Multi-layer Perceptron)
+													</option>
+													<option value="resnet18">
+														ResNet-18 (Cho CIFAR)
+													</option>
+													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											3. Môi trường Federated Learning
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label"
+													>Số lượng Workers (Nodes)</label
+												>
+												<input
+													type="number"
+													class="form-control"
+													name="num_workers"
+													value="10"
+													min="3"
+													max="100"
+												/>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label"
+													>Độ phân tán dữ liệu (Non-IID Alpha)</label
+												>
+												<div class="input-group">
+													<input
+														type="number"
+														class="form-control"
+														name="non_iid_alpha"
+														value="0.5"
+														step="0.1"
+														min="0.1"
+													/>
+													<span class="input-group-text"
+														><i class="bi bi-graph-up"></i
+													></span>
+												</div>
+												<div class="help-text mt-1">
+													Alpha nhỏ (0.1) = Rất Non-IID (Dữ liệu lệch nhiều).
+													Alpha lớn (>10) = IID.
+												</div>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											4. Hyperparameters Huấn luyện
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Batch Size</label>
+												<select class="form-select" name="batch_size">
+													<option value="16">16</option>
+													<option value="32" selected>32</option>
+													<option value="64">64</option>
+													<option value="128">128</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Learning Rate</label>
+												<input
+													type="number"
+													class="form-control"
+													name="learning_rate"
+													value="0.01"
+													step="0.001"
+												/>
+											</div>
+										</div>
+
+										<div class="col-md-12 mt-3">
+											<label class="form-label fw-bold text-primary"
+												>Số vòng lặp (Global Rounds)</label
+											>
+											<div class="input-group">
+												<input
+													type="number"
+													class="form-control border-primary"
+													name="target_rounds"
+													id="targetRounds"
+													value="10"
+													min="1"
+													max="100"
+												/>
+												<span class="input-group-text bg-primary text-white"
+													>Rounds</span
+												>
+											</div>
+											<div class="help-text">
+												Hệ thống sẽ tự động chạy liên tiếp số vòng này.
+											</div>
+										</div>
+
+										<div
+											class="alert alert-light border d-flex align-items-center mt-4"
+											role="alert"
+										>
+											<div class="form-check form-switch fs-5 me-3">
+												<input
+													class="form-check-input"
+													type="checkbox"
+													id="resetSwitchBaseline"
+													name="reset"
+													checked
+												/>
+											</div>
+											<div>
+												<label
+													class="form-check-label fw-bold text-dark"
+													for="resetSwitchBaseline"
+													>Reset toàn bộ hệ thống</label
+												>
+												<div class="small text-muted">
+													Xóa lịch sử cũ, khởi tạo lại Blockchain và Model từ
+													đầu.
+												</div>
+											</div>
+										</div>
+
+										<div class="d-flex gap-3 mt-4">
+											<button
+												type="submit"
+												class="btn btn-warning flex-fill py-2 disabled"
+											>
+												<i class="bi bi-play-circle-fill me-2"></i>
+												Chạy Kịch Bản (Run All)
+											</button>
+
+											<button
+												type="submit"
+												class="btn btn-primary flex-fill py-2"
+											>
+												<i class="bi bi-play-circle-fill me-2"></i>
+												Khởi chạy Baseline Simulation
+											</button>
+										</div>
+									</form>
+								</div>
+
+								<div class="tab-pane fade" id="attack-pane" role="tabpanel">
+									<form id="attackForm">
+										<input type="hidden" name="scenario" value="2" />
+
+										<div class="form-section-title text-danger">
+											1. Thiết lập Tấn công (Adversarial Setup)
+										</div>
+
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label fw-bold">System Mode</label>
+												<select
+													class="form-select"
+													id="attackSystemMode"
+													name="system_mode"
+												>
+													<option value="PROPOSED">
+														✨ Mô hình Đề xuất (CoCo/BCFL)
+													</option>
+													<option value="BASELINE">
+														🛡️ DFL Baseline (Truyền thống)
+													</option>
+												</select>
+											</div>
+
+											<div class="col-md-6 d-none" id="aggregationGroup">
+												<label class="form-label"
+													>Aggregation Algorithm (Cơ chế phòng thủ)</label
+												>
+												<select
+													class="form-select"
+													name="aggregation_algorithm"
+												>
+													<option value="FEDAVG">
+														FedAvg (Không phòng thủ)
+													</option>
+													<option value="UBAR" selected>
+														UBAR (Robust Aggregation)
+													</option>
+													<option value="KRUM">Krum</option>
+													<option value="TRIMMED_MEAN">Trimmed Mean</option>
+													<option value="MEDIAN">Coordinate Median</option>
+													<option value="FL_TRUST">FL Trust</option>
+													<option value="BALANCE">BALANCE</option>
+												</select>
+											</div>
+										</div>
+										<div class="mb-4">
+											<label for="num_classes" class="form-label fw-bold">
+												<i class="bi bi-tags-fill text-info me-2"></i>Số lượng
+												Nhãn (Num Classes)
+											</label>
+											<input
+												type="number"
+												class="form-control"
+												id="num_classes"
+												value="10"
+												min="2"
+												max="1000"
+											/>
+											<div class="form-text">
+												Cấu hình số lượng nhãn của Dataset (Ví dụ:
+												MNIST/CIFAR-10 = 10, Health Dataset = 2, Kather = 8).
+											</div>
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label text-danger fw-bold"
+													>Tỷ lệ Node Tấn công (Malicious Ratio)</label
+												>
+												<div class="input-group">
+													<input
+														type="number"
+														class="form-control border-danger"
+														name="malicious_ratio"
+														value="0.3"
+														step="0.1"
+														min="0.0"
+														max="1.0"
+													/>
+													<span class="input-group-text bg-danger text-white"
+														><i class="bi bi-people-fill"></i
+													></span>
+												</div>
+												<div class="help-text">
+													Ví dụ: 0.3 nghĩa là 30% workers là kẻ tấn công.
+												</div>
+											</div>
+
+											<div class="col-md-6">
+												<label class="form-label fw-bold"
+													>Loại Tấn công (Attack Type)</label
+												>
+												<select
+													class="form-select border-danger"
+													id="attackTypeSelect"
+													name="attack_type"
+												>
+													<option value="GAUSSIAN_MODEL_POISONING" selected>
+														Gaussian Model Poisoning (Nhiễu)
+													</option>
+													<option value="LABEL_FLIPPING">
+														Label Flipping (Đảo nhãn)
+													</option>
+													<option value="BACKDOOR">Backdoor (Cửa hậu)</option>
+													<option value="MIA">
+														Membership Inversion (Truy vết thành viên)
+													</option>
+													<option value="GIA">
+														Gradient Inversion (Nghe lén Gradient)
+													</option>
+												</select>
+											</div>
+										</div>
+
+										<div class="card bg-light border-danger mb-4">
+											<div class="card-body">
+												<div
+													id="params-GAUSSIAN_MODEL_POISONING"
+													class="attack-params-group"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-clouds-fill me-2"></i>Tham số
+														Gaussian Noise
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Standard Deviation (STD)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="std"
+																value="0.5"
+																step="0.1"
+															/>
+															<div class="help-text">
+																Độ lệch chuẩn của nhiễu cộng vào model.
+															</div>
+														</div>
+													</div>
+												</div>
+
+												<div
+													id="params-LABEL_FLIPPING"
+													class="attack-params-group d-none"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-arrow-repeat me-2"></i>Tham số Label
+														Flipping
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Source Class (Nhãn gốc)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="source_class"
+																value="3"
+																min="0"
+																max="9"
+															/>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Target Class (Nhãn đích)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="target_class"
+																value="5"
+																min="0"
+																max="9"
+															/>
+														</div>
+													</div>
+												</div>
+
+												<div
+													id="params-BACKDOOR"
+													class="attack-params-group d-none"
+												>
+													<h6 class="text-danger">
+														<i class="bi bi-door-open-fill me-2"></i>Tham số
+														Backdoor
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Target Class (Nhãn mục tiêu)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="target_class_backdoor"
+																value="5"
+																min="0"
+																max="9"
+															/>
+															<div class="help-text">
+																Model sẽ dự đoán sai thành nhãn này khi gặp
+																Trigger.
+															</div>
+														</div>
+													</div>
+												</div>
+												<div
+													id="params-GIA"
+													class="d-none card p-3 mb-3 bg-light border-warning attack-params-group"
+												>
+													<h6 class="text-warning fw-bold">
+														<i class="bi bi-eye"></i> Tham số Gradient Inversion
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Số vòng lặp tối ưu (Iterations)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="gia_iterations"
+																value="300"
+																min="100"
+																max="5000"
+															/>
+															<div class="form-text">
+																Số bước L-BFGS để tái tạo ảnh (càng cao ảnh càng
+																rõ nhưng chậm).
+															</div>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Reconstruction Learning Rate</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="gia_lr"
+																value="1.0"
+																step="0.1"
+															/>
+															<div class="form-text">
+																Tốc độ học của thuật toán tái tạo.
+															</div>
+														</div>
+													</div>
+												</div>
+												<div
+													id="params-MIA"
+													class="card p-3 mb-3 d-none bg-light border-info attack-params-group"
+												>
+													<h6 class="text-info fw-bold">
+														<i class="bi bi-person-bounding-box"></i> Tham số
+														Membership Inference
+													</h6>
+													<div class="row">
+														<div class="col-md-6">
+															<label class="form-label"
+																>Kích thước tập Shadow (Subset Size)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="mia_subset_size"
+																value="1000"
+																min="100"
+																step="100"
+															/>
+															<div class="form-text">
+																Số lượng mẫu (Member/Non-member) dùng để đánh
+																giá tấn công.
+															</div>
+														</div>
+														<div class="col-md-6">
+															<label class="form-label"
+																>Ngưỡng quyết định (Tau)</label
+															>
+															<input
+																type="number"
+																class="form-control"
+																name="mia_tau"
+																step="0.0001"
+																placeholder="Để trống = Tự động (Optimal ROC)"
+															/>
+															<div class="form-text">
+																Nếu để trống, hệ thống sẽ tự tìm ngưỡng Tau tối
+																ưu dựa trên ROC Curve.
+															</div>
+														</div>
+													</div>
+												</div>
+											</div>
+										</div>
+
+										<div class="form-section-title">
+											2. Môi trường & Hyperparameters
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-4">
+												<label class="form-label">Dataset</label>
+												<select class="form-select" name="dataset">
+													<option value="mnist" selected>MNIST</option>
+													<option value="cifar10">CIFAR-10</option>
+													<option value="health">Health Personal</option>
+												</select>
+											</div>
+											<div class="col-md-4">
+												<label class="form-label">Model</label>
+												<select class="form-select" name="model">
+													<option value="simple_cnn" selected>
+														Simple CNN
+													</option>
+													<option value="resnet18">ResNet-18</option>
+													<option value="vgg9">VGG9 (Cho CIFAR)</option>
+													<option value="resnet20">ResNet20</option>
+													<option value="health_mlp">Health MLP</option>
+												</select>
+											</div>
+											<div class="col-md-4">
+												<label class="form-label">Số Workers</label>
+												<input
+													type="number"
+													class="form-control"
+													name="num_workers"
+													value="20"
+												/>
+											</div>
+										</div>
+										<div class="row mb-3">
+											<div class="col-md-6">
+												<label class="form-label">Batch Size</label>
+												<select class="form-select" name="batch_size">
+													<option value="32" selected>32</option>
+													<option value="64">64</option>
+												</select>
+											</div>
+											<div class="col-md-6">
+												<label class="form-label">Learning Rate</label>
+												<input
+													type="number"
+													class="form-control"
+													name="learning_rate"
+													value="0.01"
+													step="0.001"
+												/>
+											</div>
+										</div>
+										<div class="col-md-12 mt-3">
+											<label class="form-label fw-bold text-danger"
+												>Số vòng lặp (Global Rounds)</label
+											>
+											<div class="input-group">
+												<input
+													type="number"
+													class="form-control border-danger"
+													id="targetRoundsAttack"
+													value="10"
+													min="1"
+													max="100"
+												/>
+												<span class="input-group-text bg-danger text-white"
+													>Rounds</span
+												>
+											</div>
+											<div class="help-text">
+												Hệ thống sẽ thực hiện tấn công liên tiếp trong số vòng
+												này.
+											</div>
+										</div>
+
+										<div
+											class="alert alert-light border d-flex align-items-center mt-3"
+										>
+											<div class="form-check form-switch fs-5 me-3">
+												<input
+													class="form-check-input"
+													type="checkbox"
+													id="resetSwitchAttack"
+													name="reset"
+													checked
+												/>
+											</div>
+											<label
+												class="form-check-label fw-bold"
+												for="resetSwitchAttack"
+												>Reset System</label
+											>
+										</div>
+
+										<div class="d-flex gap-3 mt-4">
+											<button
+												type="submit"
+												class="btn btn-warning flex-fill py-2 disabled"
+											>
+												<i class="bi bi-play-circle-fill"></i> Chạy Kịch Bản
+												(Run All)
+											</button>
+											<button
+												type="submit"
+												class="btn btn-danger flex-fill py-2"
+											>
+												<i class="bi bi-radioactive me-2"></i>Khởi chạy Attack
+												Simulation
+											</button>
+										</div>
+									</form>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div
+			id="loadingOverlay"
+			class="position-fixed top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-none d-flex justify-content-center align-items-center"
+			style="z-index: 1050"
+		>
+			<div class="text-center">
+				<div
+					class="spinner-border text-primary"
+					style="width: 3rem; height: 3rem"
+					role="status"
+				></div>
+				<h4 class="mt-3 text-dark">Đang khởi tạo Engine...</h4>
+				<p class="text-muted">Vui lòng đợi giây lát</p>
+			</div>
+		</div>
+
+		<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+		<script>
+			// XỬ LÝ SUBMIT CHO BASELINE FORM
+			let allResults = {};
+			let taskQueue = [];
+			let isRunningBatch = false;
+			document
+				.getElementById("baselineSystemMode")
+				.addEventListener("change", function () {
+					const group = document.getElementById("baselineAlgorithmGroup");
+
+					if (this.value === "BASELINE") {
+						group.classList.remove("d-none");
+					} else {
+						group.classList.add("d-none");
+					}
+				});
+			document
+				.getElementById("baselineForm")
+				.addEventListener("submit", async function (e) {
+					e.preventDefault();
+
+					// 1. Hiển thị Loading
+					const loadingOverlay = document.getElementById("loadingOverlay");
+					const loadingText = loadingOverlay.querySelector("h4");
+					loadingOverlay.classList.remove("d-none");
+
+					// 2. Thu thập dữ liệu cơ bản
+					const formData = new FormData(this);
+					const targetRounds =
+						parseInt(document.getElementById("targetRounds").value) || 1;
+
+					// Lấy trạng thái reset ban đầu của người dùng
+					const initialReset = document.getElementById(
+						"resetSwitchBaseline",
+					).checked;
+
+					// Tạo payload gốc
+					const basePayload = {
+						scenario: formData.get("scenario"),
+						system_mode: formData.get("system_mode"),
+						dataset: formData.get("dataset"),
+						model: formData.get("model"),
+						num_workers: parseInt(formData.get("num_workers")),
+						non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+						batch_size: parseInt(formData.get("batch_size")),
+						learning_rate: parseFloat(formData.get("learning_rate")),
+						target_rounds: targetRounds,
+						reset: initialReset,
+						num_classes: 2,
+					};
+
+					if (basePayload.system_mode === "BASELINE") {
+						basePayload.aggregation_algorithm = formData.get(
+							"aggregation_algorithm",
+						);
+					}
+					console.log(`Bắt đầu chạy ${targetRounds} vòng...`);
+
+					// try {
+					// 	// --- VÒNG LẶP GỬI REQUEST ---
+					// 	for (let i = 0; i < targetRounds; i++) {
+					// 		// Cập nhật giao diện loading
+					// 		loadingText.innerText = `Đang chạy vòng ${i + 1} / ${targetRounds}...`;
+
+					// 		// Logic quan trọng:
+					// 		// - Vòng đầu tiên (i=0): Dùng giá trị reset của người dùng (để xóa cũ nếu cần).
+					// 		// - Các vòng sau (i>0): Bắt buộc reset = false (để nối tiếp lịch sử, không xóa cái vừa train).
+					// 		const currentPayload = {
+					// 			...basePayload,
+					// 			reset: i === 0 ? initialReset : false,
+					// 		};
+
+					// 		// Gửi request
+					// 		const response = await fetch("/run_round", {
+					// 			method: "POST",
+					// 			headers: { "Content-Type": "application/json" },
+					// 			body: JSON.stringify(currentPayload),
+					// 		});
+
+					// 		const result = await response.json();
+
+					// 		if (result.status !== "success") {
+					// 			throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+					// 		}
+
+					// 		console.log(`Hoàn thành vòng ${i + 1}`);
+					// 	}
+
+					// 	// 3. Sau khi chạy đủ số vòng thì mới chuyển trang
+					// 	const numNodes = basePayload.num_workers;
+					// 	const roundsInputId =
+					// 		this.id === "baselineForm"
+					// 			? "targetRounds"
+					// 			: "targetRoundsAttack";
+					// 	const numRounds = document.getElementById(roundsInputId).value;
+
+					// 	const queryParams = new URLSearchParams({
+					// 		nodes: numNodes,
+					// 		rounds: numRounds,
+					// 		// Các thông tin khác như 'algo', 'attack' ta sẽ lấy trực tiếp từ dữ liệu trả về (globalHistory) để chính xác hơn
+					// 	});
+					// 	window.location.href = `/dashboard?${queryParams.toString()}`;
+					// } catch (error) {
+					// 	console.error("Error:", error);
+					// 	alert("Có lỗi xảy ra: " + error.message);
+					// 	loadingOverlay.classList.add("d-none");
+					// }
+					try {
+						// 3. Gửi lệnh Start Training
+						const response = await fetch("/start_training", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(basePayload),
+						});
+
+						const data = await response.json();
+						if (data.status !== "started") throw new Error(data.message);
+
+						// 4. Polling trạng thái (Hỏi server xem chạy xong chưa)
+						const checkStatus = setInterval(async () => {
+							try {
+								const res = await fetch("/training_status");
+								const status = await res.json();
+
+								loadingText.innerText = `Server đang xử lý: ${status.message} (${status.current_round}/${targetRounds})`;
+
+								if (!status.is_running && status.message === "Completed") {
+									clearInterval(checkStatus);
+									console.log("Training hoàn tất!");
+
+									// Chuyển trang dashboard kèm params để hiển thị đúng
+									const queryParams = new URLSearchParams({
+										nodes: basePayload.num_workers,
+										rounds: targetRounds,
+										non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+									});
+									window.location.href = `/dashboard?${queryParams.toString()}`;
+								} else if (
+									!status.is_running &&
+									status.message.startsWith("Error")
+								) {
+									clearInterval(checkStatus);
+									throw new Error(status.message);
+								}
+							} catch (err) {
+								console.error("Polling error:", err);
+							}
+						}, 1000); // Hỏi mỗi 1 giây
+					} catch (error) {
+						alert("Lỗi: " + error.message);
+						loadingOverlay.classList.add("d-none");
+					}
+				});
+			// --- LOGIC CHO ATTACK FORM ---
+
+			// 1. Ẩn/Hiện Aggregation Algorithm dựa trên System Mode
+			const attackSystemMode = document.getElementById("attackSystemMode");
+			const aggregationGroup = document.getElementById("aggregationGroup");
+
+			attackSystemMode.addEventListener("change", function () {
+				if (this.value === "BASELINE") {
+					aggregationGroup.classList.remove("d-none");
+				} else {
+					aggregationGroup.classList.add("d-none");
+				}
+			});
+
+			// 2. Ẩn/Hiện Tham số dựa trên Attack Type
+			const attackTypeSelect = document.getElementById("attackTypeSelect");
+			const paramGroups = document.querySelectorAll(".attack-params-group");
+
+			attackTypeSelect.addEventListener("change", function () {
+				const selectedType = this.value;
+
+				// Ẩn tất cả trước
+				paramGroups.forEach((group) => group.classList.add("d-none"));
+
+				// Hiện cái được chọn
+				const targetGroup = document.getElementById(`params-${selectedType}`);
+				if (targetGroup) {
+					targetGroup.classList.remove("d-none");
+				}
+			});
+
+			// 3. Xử lý Submit Attack Form
+			// document
+			// 	.getElementById("attackForm")
+			// 	.addEventListener("submit", async function (e) {
+			// 		e.preventDefault();
+
+			// 		// 1. Setup Loading UI
+			// 		const loadingOverlay = document.getElementById("loadingOverlay");
+			// 		const loadingText = loadingOverlay.querySelector("h4");
+			// 		loadingOverlay.classList.remove("d-none");
+
+			// 		const formData = new FormData(this);
+			// 		const attackType = formData.get("attack_type");
+
+			// 		// Lấy số vòng lặp mục tiêu và trạng thái reset ban đầu
+			// 		const targetRounds =
+			// 			parseInt(document.getElementById("targetRoundsAttack").value) || 1;
+			// 		const initialReset =
+			// 			document.getElementById("resetSwitchAttack").checked;
+
+			// 		// Tạo Base Payload (Các tham số cố định)
+			// 		const basePayload = {
+			// 			scenario: "4", // Hoặc "2" tùy logic backend của bạn
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+			// 			attack_type: attackType,
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+
+			// 		// Thêm params riêng cho BASELINE
+			// 		if (basePayload.system_mode === "BASELINE") {
+			// 			basePayload.aggregation_algorithm = formData.get(
+			// 				"aggregation_algorithm",
+			// 			);
+			// 		}
+
+			// 		// Thêm params riêng cho từng loại Tấn công
+			// 		if (attackType === "GAUSSIAN_MODEL_POISONING") {
+			// 			basePayload.std = parseFloat(formData.get("std"));
+			// 		} else if (attackType === "LABEL_FLIPPING") {
+			// 			basePayload.source_class = parseInt(formData.get("source_class"));
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_flip"),
+			// 			);
+			// 		} else if (attackType === "BACKDOOR") {
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_backdoor"),
+			// 			);
+			// 		} else if (attackType == "GIA") {
+			// 			basePayload.gia_iterations = parseInt(
+			// 				formData.get("gia_iterations"),
+			// 			);
+			// 			basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+			// 		} else if (attackType == "MIA") {
+			// 			// 1. Lấy subset size
+			// 			basePayload.mia_subset_size =
+			// 				parseInt(formData.get("mia_subset_size")) || 1000;
+
+			// 			// 2. Lấy Tau (xử lý trường hợp để trống)
+			// 			const tauInput = formData.get("mia_tau");
+			// 			if (tauInput && tauInput.trim() !== "") {
+			// 				basePayload.tau = parseFloat(tauInput);
+			// 			} else {
+			// 				basePayload.tau = null; // Backend sẽ tự tính toán
+			// 			}
+			// 		}
+
+			// 		console.log(`Bắt đầu chạy tấn công ${targetRounds} vòng...`);
+
+			// 		try {
+			// 			// --- VÒNG LẶP GỬI REQUEST ---
+			// 			for (let i = 0; i < targetRounds; i++) {
+			// 				// Cập nhật text loading
+			// 				loadingText.innerText = `Đang tấn công vòng ${i + 1} / ${targetRounds}...`;
+
+			// 				// Cập nhật trạng thái Reset: Chỉ reset vòng đầu tiên
+			// 				const currentPayload = {
+			// 					...basePayload,
+			// 					reset: i === 0 ? initialReset : false,
+			// 				};
+
+			// 				// Gửi Request
+			// 				const response = await fetch("/run_round", {
+			// 					method: "POST",
+			// 					headers: { "Content-Type": "application/json" },
+			// 					body: JSON.stringify(currentPayload),
+			// 				});
+
+			// 				const result = await response.json();
+
+			// 				if (result.status !== "success") {
+			// 					throw new Error(result.message || "Lỗi tại vòng " + (i + 1));
+			// 				}
+
+			// 				console.log(`Hoàn thành vòng ${i + 1}`);
+			// 			}
+
+			// 			// Chạy xong hết thì chuyển trang
+			// 			window.location.href = "/dashboard";
+			// 		} catch (error) {
+			// 			console.error("Error:", error);
+			// 			alert("Có lỗi xảy ra: " + error.message);
+			// 			loadingOverlay.classList.add("d-none");
+			// 			// Reset text loading về mặc định
+			// 			loadingText.innerText = "Đang khởi tạo Engine...";
+			// 		}
+			// 	});
+
+			document
+				.getElementById("attackForm")
+				.addEventListener("submit", async function (e) {
+					e.preventDefault();
+
+					// 1. Setup Loading UI
+					const loadingOverlay = document.getElementById("loadingOverlay");
+					const loadingText = loadingOverlay.querySelector("h4");
+					loadingOverlay.classList.remove("d-none");
+					loadingText.innerText = "Đang khởi tạo Engine...";
+
+					try {
+						const formData = new FormData(this);
+						const attackType = formData.get("attack_type");
+
+						// Lấy số vòng lặp mục tiêu
+						const targetRounds =
+							parseInt(document.getElementById("targetRoundsAttack").value) ||
+							1;
+						const initialReset =
+							document.getElementById("resetSwitchAttack").checked; // Server tự handle reset
+
+						// 2. Tạo Base Payload
+						const basePayload = {
+							scenario: "4", // Scenario 4 là Security
+							system_mode: formData.get("system_mode"),
+							dataset: formData.get("dataset"),
+							model: formData.get("model"),
+							num_workers: parseInt(formData.get("num_workers")),
+							malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+							attack_type: attackType,
+							batch_size: parseInt(formData.get("batch_size")),
+							learning_rate: parseFloat(formData.get("learning_rate")),
+							target_rounds: targetRounds, // Gửi số vòng lên server
+							num_classes: parseInt(
+								document.getElementById("num_classes").value,
+							),
+							reset: initialReset,
+						};
+
+						// Thêm params riêng cho BASELINE (nếu chọn Baseline bị tấn công)
+						if (basePayload.system_mode === "BASELINE") {
+							basePayload.aggregation_algorithm = formData.get(
+								"aggregation_algorithm",
+							);
+						}
+
+						// Thêm params riêng cho từng loại Tấn công
+						if (attackType === "GAUSSIAN_MODEL_POISONING") {
+							basePayload.std = parseFloat(formData.get("std"));
+						} else if (attackType === "LABEL_FLIPPING") {
+							basePayload.source_class = parseInt(formData.get("source_class"));
+							basePayload.target_class = parseInt(formData.get("target_class"));
+						} else if (attackType === "BACKDOOR") {
+							basePayload.target_class = parseInt(
+								formData.get("target_class_backdoor"),
+							);
+						} else if (attackType === "GIA") {
+							basePayload.gia_iterations = parseInt(
+								formData.get("gia_iterations"),
+							);
+							basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+						} else if (attackType === "MIA") {
+							basePayload.mia_subset_size =
+								parseInt(formData.get("mia_subset_size")) || 1000;
+							const tauInput = formData.get("mia_tau");
+							basePayload.tau =
+								tauInput && tauInput.trim() !== ""
+									? parseFloat(tauInput)
+									: null;
+						}
+
+						console.log(
+							`Gửi lệnh chạy tấn công ${targetRounds} vòng...`,
+							basePayload,
+						);
+
+						// 3. Gửi lệnh Start Training (Chỉ 1 request duy nhất)
+						const response = await fetch("/start_training", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(basePayload),
+						});
+
+						const data = await response.json();
+						if (data.status !== "started") throw new Error(data.message);
+
+						// 4. Polling trạng thái
+						const checkStatus = setInterval(async () => {
+							try {
+								const res = await fetch("/training_status");
+								const status = await res.json();
+
+								// Cập nhật giao diện
+								loadingText.innerText = `Server đang xử lý: ${status.message}`;
+								if (status.total_rounds > 0) {
+									loadingText.innerText += ` (${status.current_round}/${status.total_rounds})`;
+								}
+
+								// Kiểm tra hoàn thành
+								if (!status.is_running && status.message === "Completed") {
+									clearInterval(checkStatus);
+									console.log("Training hoàn tất!");
+
+									// Chuyển trang dashboard
+									// basePayload vẫn truy cập được ở đây nhờ Closure của JS
+									const queryParams = new URLSearchParams({
+										nodes: basePayload.num_workers,
+										rounds: targetRounds,
+										attack: attackType, // Thêm tham số attack để dashboard biết
+									});
+									window.location.href = `/dashboard?${queryParams.toString()}`;
+								} else if (
+									!status.is_running &&
+									status.message.startsWith("Error")
+								) {
+									clearInterval(checkStatus);
+									throw new Error(status.message);
+								}
+							} catch (err) {
+								console.error("Polling error:", err);
+							}
+						}, 1000); // Hỏi mỗi 1 giây
+					} catch (error) {
+						console.error("Lỗi:", error);
+						alert("Có lỗi xảy ra: " + error.message);
+						loadingOverlay.classList.add("d-none");
+					}
+				});
+			// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			// async function handleRunAll(event, mode) {
+			// 	event.preventDefault();
+			// 	const form = event.target;
+			// 	const formData = new FormData(form);
+
+			// 	// 1. Lấy danh sách thuật toán được chọn
+			// 	const checkboxes = form.querySelectorAll(".algo-checkbox:checked");
+			// 	if (checkboxes.length === 0) {
+			// 		alert("Vui lòng chọn ít nhất 1 thuật toán!");
+			// 		return;
+			// 	}
+
+			// 	// 2. Lấy tham số chung
+			// 	let rounds = 0;
+			// 	let basePayload = {};
+
+			// 	if (mode === "BASELINE") {
+			// 		rounds = parseInt(formData.get("rounds"));
+			// 		basePayload = {
+			// 			scenario: formData.get("scenario"),
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			non_iid_alpha: parseFloat(formData.get("non_iid_alpha")),
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+			// 	} else {
+			// 		// Mode ATTACK
+			// 		rounds = parseInt(formData.get("rounds_attack"));
+			// 		basePayload = {
+			// 			scenario: "4", // Hoặc "2" tùy logic backend của bạn
+			// 			system_mode: formData.get("system_mode"),
+			// 			dataset: formData.get("dataset"),
+			// 			model: formData.get("model"),
+			// 			num_workers: parseInt(formData.get("num_workers")),
+			// 			malicious_ratio: parseFloat(formData.get("malicious_ratio")),
+			// 			attack_type: attackType,
+			// 			batch_size: parseInt(formData.get("batch_size")),
+			// 			learning_rate: parseFloat(formData.get("learning_rate")),
+			// 		};
+			// 		// Logic lấy param nâng cao (MIA, GIA...)
+			// 		const atype = basePayload.attack_type;
+			// 		// Thêm params riêng cho từng loại Tấn công
+			// 		if (basePayload.system_mode === "BASELINE") {
+			// 			basePayload.aggregation_algorithm = formData.get(
+			// 				"aggregation_algorithm",
+			// 			);
+			// 		}
+			// 		if (attackType === "GAUSSIAN_MODEL_POISONING") {
+			// 			basePayload.std = parseFloat(formData.get("std"));
+			// 		} else if (attackType === "LABEL_FLIPPING") {
+			// 			basePayload.source_class = parseInt(formData.get("source_class"));
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_flip"),
+			// 			);
+			// 		} else if (attackType === "BACKDOOR") {
+			// 			basePayload.target_class = parseInt(
+			// 				formData.get("target_class_backdoor"),
+			// 			);
+			// 		} else if (attackType == "GIA") {
+			// 			basePayload.gia_iterations = parseInt(
+			// 				formData.get("gia_iterations"),
+			// 			);
+			// 			basePayload.gia_lr = parseFloat(formData.get("gia_lr"));
+			// 		} else if (attackType == "MIA") {
+			// 			// 1. Lấy subset size
+			// 			basePayload.mia_subset_size =
+			// 				parseInt(formData.get("mia_subset_size")) || 1000;
+
+			// 			// 2. Lấy Tau (xử lý trường hợp để trống)
+			// 			const tauInput = formData.get("mia_tau");
+			// 			if (tauInput && tauInput.trim() !== "") {
+			// 				basePayload.tau = parseFloat(tauInput);
+			// 			} else {
+			// 				basePayload.tau = null; // Backend sẽ tự tính toán
+			// 			}
+			// 		}
+			// 	}
+
+			// 	// 3. Xây dựng hàng đợi Task
+			// 	taskQueue = [];
+			// 	checkboxes.forEach((cb) => {
+			// 		taskQueue.push({
+			// 			algo: cb.value, // PROPOSED, BASELINE, COCO
+			// 			rounds: rounds,
+			// 			config: { ...basePayload, system_mode: cb.value },
+			// 		});
+			// 	});
+
+			// 	// 4. Bắt đầu chạy
+			// 	if (
+			// 		confirm(
+			// 			`Bạn sắp chạy ${taskQueue.length} thuật toán x ${rounds} vòng.\nTổng cộng: ${taskQueue.length * rounds} vòng lặp.\nTiếp tục?`,
+			// 		)
+			// 	) {
+			// 		allResults = {}; // Reset kết quả cũ
+			// 		isRunningBatch = true;
+			// 		await processQueue();
+			// 	}
+			// }
+			// // Hàm xử lý hàng đợi tuần tự
+			// async function processQueue() {
+			// 	if (taskQueue.length === 0) {
+			// 		// Đã chạy xong hết -> Xuất Excel và chuyển trang
+			// 		finishBatch();
+			// 		return;
+			// 	}
+
+			// 	const currentTask = taskQueue.shift(); // Lấy task đầu tiên
+			// 	const algoName = currentTask.algo;
+			// 	const rounds = currentTask.rounds;
+
+			// 	updateStatus(`Đang chạy thuật toán: <b>${algoName}</b> (0/${rounds})`);
+
+			// 	// Container lưu kết quả của thuật toán này
+			// 	let algoMetrics = [];
+
+			// 	try {
+			// 		for (let i = 0; i < rounds; i++) {
+			// 			// Payload
+			// 			let payload = {
+			// 				...currentTask.config,
+			// 				target_rounds: rounds, // Để backend biết
+			// 				reset: i === 0, // Chỉ reset ở vòng 0 của mỗi thuật toán
+			// 			};
+
+			// 			// Gọi API
+			// 			const res = await fetch("/run_round", {
+			// 				method: "POST",
+			// 				headers: { "Content-Type": "application/json" },
+			// 				body: JSON.stringify(payload),
+			// 			});
+
+			// 			const data = await res.json();
+			// 			if (data.status !== "success") throw new Error(data.message);
+
+			// 			// Lưu metric vòng này
+			// 			// Giả sử backend trả về data.metrics chứa { accuracy, loss, ... }
+			// 			// Nếu backend chưa trả về metrics từng vòng, bạn cần sửa backend hoặc
+			// 			// gọi API /get_metrics sau mỗi vòng.
+			// 			// Ở đây tôi giả định bạn sẽ lấy full history sau khi chạy xong 1 algo.
+
+			// 			updateStatus(
+			// 				`Đang chạy thuật toán: <b>${algoName}</b> (${i + 1}/${rounds})`,
+			// 			);
+			// 		}
+
+			// 		// Sau khi chạy xong 1 thuật toán, gọi API lấy toàn bộ metrics của nó
+			// 		const historyRes = await fetch("/get_metrics"); // Bạn cần có API này hoặc lấy từ biến globalHistory
+			// 		const historyData = await historyRes.json();
+
+			// 		// Lưu vào biến tổng
+			// 		allResults[algoName] = historyData;
+
+			// 		// Nghỉ 1 chút trước khi qua thuật toán mới
+			// 		await new Promise((r) => setTimeout(r, 1000));
+
+			// 		// Đệ quy để chạy task tiếp theo
+			// 		processQueue();
+			// 	} catch (err) {
+			// 		alert(`Lỗi khi chạy ${algoName}: ${err.message}`);
+			// 		isRunningBatch = false;
+			// 	}
+			// }
+			// // Gán sự kiện
+			// document
+			// 	.getElementById("baselineForm")
+			// 	.addEventListener("submit", (e) => handleRunAll(e, "BASELINE"));
+			// document
+			// 	.getElementById("attackForm")
+			// 	.addEventListener("submit", (e) => handleRunAll(e, "ATTACK"));
+		</script>
+	</body>
+</html>
