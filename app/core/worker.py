@@ -193,81 +193,7 @@ class WorkerNode:
         self.current_loss = min_loss
         self.model.load_state_dict(cluster_models[best_cid])
         print(f"Worker {self.id} joined Cluster {self.cluster_id} with loss {losses[self.cluster_id]:.4f}")
-
-    # def train(self):
-    #     """Bước 2: Huấn luyện cục bộ (Local Training)"""
-    #     # self.model.train()
-    #     # # ... logic training loop (SGD) ...
-    #     self.optimizer = torch.optim.SGD(self.model.parameters(), 
-    #                                lr=self.config.get('learning_rate', 0.01),
-    #                                momentum=0.9)
-    #     if self.attack_strategy.is_malicious:
-    #         weights = self.attack_strategy.execute(self)
-    #         return {
-    #             "weights": weights,
-    #             "loss": None,
-    #         }
-    #     else:
-    #         weights, loss = self._standard_train()
-    #         return {
-    #             "weights": weights,
-    #             "loss": loss
-    #         }
-        # return self.attack_strategy.execute(self)
-    # def apply_ldp_sparse(self, delta, sparsity=0.01): # sparsity=0.01 nghĩa là giữ 1%
-    #     """
-    #     LDP dạng thưa (Sparse LDP):
-    #     Chỉ giữ lại Top-k tham số thay đổi nhiều nhất và cộng nhiễu vào đó.
-    #     Giúp giảm Norm của nhiễu đi căn bậc 2 của (1/sparsity) lần.
-    #     """
-    #     if not Config.ENABLE_LDP:
-    #         return delta
-
-    #     noisy_delta = {}
-        
-    #     # 1. Tính toán ngưỡng Top-k
-    #     all_values = []
-    #     for v in delta.values():
-    #         if v.dtype in [torch.float, torch.float32]:
-    #             all_values.append(v.view(-1).abs())
-        
-    #     if not all_values: return delta
-        
-    #     full_vec = torch.cat(all_values)
-    #     total_params = full_vec.numel()
-    #     k = int(total_params * sparsity)
-    #     if k < 1: k = 1
-        
-    #     # Tìm giá trị ngưỡng (threshold) để lọt vào top k
-    #     top_k_threshold = torch.kthvalue(full_vec, total_params - k + 1).values.item()
-
-    #     # 2. Lấy Sigma và Clipping Threshold
-    #     # Cần config C rất nhỏ cho update (ví dụ 0.05 hoặc 0.1)
-    #     clip_threshold = Config.LDP_CLIPPING_THRESHOLD 
-    #     sigma = LDP.get_ldp_sigma()
-    #     print(f"SIgma applied in LDP for model: {sigma}")
-        
-    #     # 3. Áp dụng Mask & Noise
-    #     for k, v in delta.items():
-    #         if v.dtype not in [torch.float, torch.float32]:
-    #             noisy_delta[k] = v
-    #             continue
-
-    #         # Mask: 1 nếu thuộc Top-k, 0 nếu không
-    #         mask = (v.abs() >= top_k_threshold).float()
-            
-    #         # Clipping: Cắt update trong khoảng [-C, C]
-    #         # scale = max(1, norm/C) -> Ở đây làm đơn giản là clamp từng giá trị
-    #         clipped_v = torch.clamp(v, -clip_threshold, clip_threshold)
-            
-    #         # Tạo nhiễu (chỉ cộng vào những nơi mask = 1)
-    #         noise = torch.normal(0, sigma, v.shape, device=self.device)
-            
-    #         # Update mới = (Clipped_Update + Noise) * Mask
-    #         # Những chỗ không quan trọng sẽ biến thành 0 (Sparsification)
-    #         noisy_delta[k] = (clipped_v + noise) * mask
-            
-    #     return noisy_delta
+    
     def apply_ldp_sparse(self, delta, sparsity=0.01):
         """
         LDP dạng thưa (Sparse LDP) - Phiên bản Hợp nhất (Unified)
@@ -1367,7 +1293,7 @@ class WorkerNode:
         self.model.load_state_dict(original_state)
         self.model.to('cpu')
 
-        # Se nenhum modelo foi carregado com sucesso, retorna fallback
+        # return fallback
         if best_loss == float('inf'):
             best_loss = 10000.0
             best_acc = 0.0

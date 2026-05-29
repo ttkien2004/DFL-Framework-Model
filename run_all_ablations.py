@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 def run_ablation(mode, rounds=10, workers=20):
-    """Executa um modo de ablação"""
+    """Hàm chạy ablation, nhận tham số là rounds và số lượng workers"""
     print(f"\n{'='*70}")
     print(f"  [Mode {mode}] Starting Ablation Study...")
     print(f"  Rounds: {rounds}, Workers: {workers}")
@@ -28,7 +28,7 @@ def run_ablation(mode, rounds=10, workers=20):
     return result.returncode == 0
 
 def compare_results():
-    """Compara e exibe todos os resultados"""
+    """Hàm so sánh tất cả kết quả"""
     print(f"\n{'='*70}")
     print("  COMPARING ALL RESULTS")
     print(f"{'='*70}\n")
@@ -37,7 +37,7 @@ def compare_results():
     json_files = sorted(glob.glob("histories/ablation_*.json"))
     
     if not json_files:
-        print("[WARN] Nenhum arquivo JSON encontrado em histories/")
+        print("[WARN] No JSON generated in histories")
         return
     
     print(f"{'Mode':<6} {'Scenario':<20} {'Accuracy':<12} {'Loss':<12} {'Traffic':<12}")
@@ -83,7 +83,6 @@ def main():
     print(f"  Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*70)
     
-    # Configurações
     MODES = [0, 1, 2, 4, 8, 15]
     ROUNDS = 10
     WORKERS = 20
@@ -94,7 +93,7 @@ def main():
     print(f"  Workers: {WORKERS}")
     print(f"\nTempo estimado: ~{len(MODES) * 2} minutos")
     
-    # Executar
+    # Execution
     success_count = 0
     failed_modes = []
     
@@ -105,7 +104,7 @@ def main():
         else:
             failed_modes.append(mode)
     
-    # Resultados
+    # Results
     print(f"\n{'='*70}")
     print("  EXECUTION SUMMARY")
     print(f"{'='*70}")
@@ -116,13 +115,13 @@ def main():
     else:
         print(f"  Status: ALL MODES SUCCESSFUL! ✅")
     
-    # Comparar resultados
+    # Thực thi so sánh kết quả
     compare_results()
     
     print(f"\n{'='*70}")
     print(f"  End Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*70)
-    print("\nResultados salvos em: histories/ablation_*.json")
+    print("\nKết quả trả về: histories/ablation_*.json")
 
 if __name__ == "__main__":
     main()

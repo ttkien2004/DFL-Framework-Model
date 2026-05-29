@@ -1,29 +1,30 @@
-# 🎯 Guia Rápido - Ablation Study com Health Dataset
+# 🎯 Hướng Dẫn Nhanh - Ablation Study với Health Dataset
 
-## ✅ Tudo Pronto!
+## ✅ Mọi Thứ Đã Sẵn Sàng!
 
-Dataset gerado: **5.000 registros** com 28 features de saúde pessoal
+Dataset đã được tạo: **5.000 bản ghi** với 28 đặc trưng sức khỏe cá nhân
 
 ---
 
-## 🚀 Seu Comando Principal (Recomendado)
+## 🚀 Lệnh Chính Của Bạn (Khuyến Nghị)
 
 ```bash
 python run_health_ablation.py --bypass_mode 15 --rounds 10 --workers 20
 ```
 
-### O que isso faz:
-- Executa ablation study com **Traditional DFL** (todos os components desabilitados)
-- 10 rodadas de treinamento
+### Lệnh này thực hiện:
+
+- Chạy ablation study với **Traditional DFL** (tất cả components bị vô hiệu hóa)
+- 10 vòng huấn luyện
 - 20 workers
 - Dataset: Health Personal
-- Modelo: HealthMLP
+- Mô hình: HealthMLP
 
 ---
 
-## 📊 Comparar Múltiplos Modos
+## 📊 So Sánh Nhiều Chế Độ
 
-Execute estes 6 comandos para comparação completa:
+Chạy 6 lệnh sau để so sánh đầy đủ:
 
 ```bash
 # 1. Full Features (CoCo + LDP + BALANCE + Blockchain)
@@ -32,7 +33,7 @@ python run_health_ablation.py --bypass_mode 0 --rounds 5 --workers 20
 # 2. No Clustering
 python run_health_ablation.py --bypass_mode 1 --rounds 5 --workers 20
 
-# 3. No Privacy (sem LDP/SSS)
+# 3. No Privacy (không có LDP/SSS)
 python run_health_ablation.py --bypass_mode 2 --rounds 5 --workers 20
 
 # 4. No Byzantine (FedAvg)
@@ -41,13 +42,13 @@ python run_health_ablation.py --bypass_mode 4 --rounds 5 --workers 20
 # 5. No Blockchain (RAM storage)
 python run_health_ablation.py --bypass_mode 8 --rounds 5 --workers 20
 
-# 6. Traditional DFL (seu comando)
+# 6. Traditional DFL (lệnh chính của bạn)
 python run_health_ablation.py --bypass_mode 15 --rounds 5 --workers 20
 ```
 
 ---
 
-## ⚡ Teste Rápido (2 min)
+## ⚡ Kiểm Tra Nhanh (2 phút)
 
 ```bash
 python run_health_ablation.py --bypass_mode 15 --rounds 2 --workers 5
@@ -55,13 +56,14 @@ python run_health_ablation.py --bypass_mode 15 --rounds 2 --workers 5
 
 ---
 
-## 📋 Listar Todos os Modos
+## 📋 Liệt Kê Tất Cả Các Chế Độ
 
 ```bash
 python run_health_ablation.py --list_modes
 ```
 
-Output:
+Kết quả:
+
 ```
 Available Bypass Modes for Health Ablation Study:
 ────────────────────────────────────────────────────────────────────────────────
@@ -76,16 +78,19 @@ Available Bypass Modes for Health Ablation Study:
 
 ---
 
-## 📁 Outputs
+## 📁 Kết Quả Đầu Ra
 
-Cada execução gera um arquivo JSON em: `histories/ablation_[timestamp]_[scenario_name].json`
+Mỗi lần chạy sẽ tạo một file JSON trong thư mục:
+`histories/ablation_[timestamp]_[scenario_name].json`
 
-Exemplo:
+Ví dụ:
+
 ```
 histories/ablation_20260515_111533_Traditional_DFL.json
 ```
 
-### Conteúdo do JSON:
+### Nội dung file JSON:
+
 ```json
 {
   "ablation_scenario": "Traditional_DFL",
@@ -113,59 +118,65 @@ histories/ablation_20260515_111533_Traditional_DFL.json
 
 ---
 
-## 🔍 Análise de Resultados
+## 🔍 Phân Tích Kết Quả
 
-### Ver todos os arquivos gerados:
+### Xem tất cả file đã tạo:
+
 ```bash
 ls -la histories/ablation_*.json
 ```
 
-### Carregar e analisar em Python:
+### Tải và phân tích bằng Python:
+
 ```python
 import json
 
 with open("histories/ablation_20260515_111533_Traditional_DFL.json") as f:
     data = json.load(f)
 
-# Ver cenário
+# Xem kịch bản
 print(f"Scenario: {data['ablation_scenario']}")
 
-# Ver accuracy final
+# Xem accuracy cuối cùng
 final_acc = data['metrics']['avg_acc'][-1]
 print(f"Final Accuracy: {final_acc:.4f}")
 
-# Ver média de accuracy
+# Xem accuracy trung bình
 avg_acc = sum(data['metrics']['avg_acc']) / len(data['metrics']['avg_acc'])
 print(f"Average Accuracy: {avg_acc:.4f}")
 ```
 
 ---
 
-## 📈 Workflow Recomendado
+## 📈 Workflow Được Khuyến Nghị
 
-### Passo 1: Teste Rápido (Validar Setup)
+### Bước 1: Kiểm Tra Nhanh (Xác nhận setup)
+
 ```bash
 python run_health_ablation.py --bypass_mode 15 --rounds 2 --workers 5
 ```
 
-### Passo 2: Rodar Modo Principal
+### Bước 2: Chạy Chế Độ Chính
+
 ```bash
 python run_health_ablation.py --bypass_mode 15 --rounds 10 --workers 20
 ```
 
-### Passo 3: Comparar com Full Features
+### Bước 3: So Sánh với Full Features
+
 ```bash
 python run_health_ablation.py --bypass_mode 0 --rounds 10 --workers 20
 ```
 
-### Passo 4: Análise Comparativa
+### Bước 4: Phân Tích So Sánh
+
 ```python
 # compare.py
 import json
 
 results = {}
 for mode in [0, 1, 2, 4, 8, 15]:
-    # Encontre o arquivo correspondente em histories/
+    # Tìm file tương ứng trong histories/
     with open(f"histories/ablation_*_{mode}_*.json") as f:
         data = json.load(f)
         scenario = data['ablation_scenario']
@@ -178,67 +189,73 @@ for scenario, acc in sorted(results.items()):
 
 ---
 
-## 💡 Interpretação dos Resultados
+## 💡 Giải Thích Kết Quả
 
-| Métrica             | Significado                                     |
-| ------------------- | ----------------------------------------------- |
-| **avg_acc**         | Acurácia média (0.0-1.0) - quanto maior, melhor |
-| **avg_loss**        | Perda média - quanto menor, melhor              |
-| **max_ter**         | Taxa de erro máximo - quanto menor, melhor      |
-| **comm_traffic_mb** | Tráfego de comunicação - quanto menor, melhor   |
-| **execution_time**  | Tempo de execução - quanto menor, melhor        |
+| Chỉ số              | Ý nghĩa                                           |
+| ------------------- | ------------------------------------------------- |
+| **avg_acc**         | Accuracy trung bình (0.0-1.0) - càng cao càng tốt |
+| **avg_loss**        | Loss trung bình - càng thấp càng tốt              |
+| **max_ter**         | Tỷ lệ lỗi tối đa - càng thấp càng tốt             |
+| **comm_traffic_mb** | Lưu lượng giao tiếp - càng thấp càng tốt          |
+| **execution_time**  | Thời gian thực thi - càng thấp càng tốt           |
 
-### Comparação Esperada:
+### So sánh mong đợi:
 
-- **Mode 0 vs 15**: Mode 0 melhor accuracy (tem LDP + BALANCE)
-- **Mode 1 vs 15**: Mode 1 menos tráfego (1 cluster vs K clusters)
-- **Mode 2 vs 15**: Mode 2 melhor accuracy (sem noise de privacy)
-- **Mode 4 vs 15**: Mode 4 mais rápido (FedAvg vs BALANCE)
-- **Mode 8 vs 15**: Mode 8 mais rápido (RAM vs Blockchain)
+- **Mode 0 vs 15**: Mode 0 có accuracy tốt hơn (có LDP + BALANCE)
+- **Mode 1 vs 15**: Mode 1 ít lưu lượng hơn (1 cluster vs K clusters)
+- **Mode 2 vs 15**: Mode 2 có accuracy tốt hơn (không có privacy noise)
+- **Mode 4 vs 15**: Mode 4 nhanh hơn (FedAvg vs BALANCE)
+- **Mode 8 vs 15**: Mode 8 nhanh hơn (RAM vs Blockchain)
 
 ---
 
-## 🐛 Troubleshooting
+## 🐛 Khắc Phục Sự Cố
 
 ### Q: "Health dataset not found"
+
 ```bash
 python generate_health_data.py
 ```
 
-### Q: "Muito lento"
-Use menos rounds/workers:
+### Q: "Chạy quá chậm"
+
+Giảm số rounds/workers:
+
 ```bash
 python run_health_ablation.py --bypass_mode 15 --rounds 3 --workers 10
 ```
 
 ### Q: "CUDA out of memory"
-Reduz batch_size (edit `run_health_ablation.py` linha 30)
 
-### Q: "Arquivo JSON não criado"
-Verifica se pasta `histories/` existe:
+Giảm batch_size (chỉnh trong `run_health_ablation.py` dòng 30)
+
+### Q: "Không tạo được file JSON"
+
+Kiểm tra thư mục `histories/` đã tồn tại:
+
 ```bash
 mkdir -p histories
 ```
 
 ---
 
-## 📚 Estrutura de Arquivos
+## 📚 Cấu Trúc Thư Mục
 
 ```
 d:\DATN\DFL-Framework-Model\
-├── run_health_ablation.py          ← Script principal (use isto!)
-├── generate_health_data.py         ← Gera dataset
+├── run_health_ablation.py          ← Script chính (dùng file này!)
+├── generate_health_data.py         ← Tạo dataset
 ├── app/
 │   ├── core/
-│   │   ├── bypass_ablation.py     ← Lógica bypass
-│   │   ├── engine.py              ← Engine principal
+│   │   ├── bypass_ablation.py     ← Logic bypass
+│   │   ├── engine.py              ← Engine chính
 │   │   └── worker.py              ← Workers
 │   ├── models/
-│   │   └── cnn.py                 ← HealthMLP model
+│   │   └── cnn.py                 ← Mô hình HealthMLP
 │   └── utils/
 │       └── data_loader.py         ← Dataset loader
 ├── data/
-│   └── personal_health_data.csv   ← Dataset (criado por generate_health_data.py)
+│   └── personal_health_data.csv   ← Dataset (được tạo bởi generate_health_data.py)
 └── histories/
     ├── ablation_20260515_111533_Traditional_DFL.json
     ├── ablation_20260515_111604_Full_Features.json
@@ -249,28 +266,29 @@ d:\DATN\DFL-Framework-Model\
 
 ## ✅ Checklist
 
-- [x] Dataset gerado: `data/personal_health_data.csv` (5.000 registros)
-- [ ] Teste Rápido: `python run_health_ablation.py --bypass_mode 15 --rounds 2 --workers 5`
-- [ ] Modo Principal: `python run_health_ablation.py --bypass_mode 15 --rounds 10 --workers 20`
-- [ ] Comparação: Rodar 6 modos diferentes
-- [ ] Análise: Verificar resultados em `histories/`
+- [x] Dataset đã tạo: `data/personal_health_data.csv` (5.000 bản ghi)
+- [ ] Kiểm tra nhanh:
+      `python run_health_ablation.py --bypass_mode 15 --rounds 2 --workers 5`
+- [ ] Chế độ chính:
+      `python run_health_ablation.py --bypass_mode 15 --rounds 10 --workers 20`
+- [ ] So sánh: Chạy 6 chế độ khác nhau
+- [ ] Phân tích: Kiểm tra kết quả trong `histories/`
 
 ---
 
-## 🎓 O que Significa Bypass Mode 15?
+## 🎓 Bypass Mode 15 Có Nghĩa Là Gì?
 
-**Tradicional DFL** = Todas as features desabilitadas:
-- ❌ Sem CoCo Clustering (tudo em 1 cluster)
-- ❌ Sem LDP Privacy (gradientes limpos)
-- ❌ Sem BALANCE Byzantine (usa FedAvg simples)
-- ❌ Sem Blockchain Consensus (RAM storage)
+**Traditional DFL** = Tất cả tính năng bị vô hiệu hóa:
 
-= Federated Learning tradicional, sem inovações
+- ❌ Không có CoCo Clustering (mọi thứ trong 1 cluster)
+- ❌ Không có LDP Privacy (gradient sạch)
+- ❌ Không có BALANCE Byzantine (dùng FedAvg đơn giản)
+- ❌ Không có Blockchain Consensus (RAM storage)
+
+= Federated Learning truyền thống, không có cải tiến
 
 ---
 
-**Criado:** 2025-05-15  
-**Status:** ✅ Pronto para usar  
-**Dataset:** Health Personal (5.000 registros, 28 features)  
-**Modelos:** HealthMLP  
-**Bypass Modes:** 6 (0, 1, 2, 4, 8, 15)
+**Tạo ngày:** 2025-05-15 **Trạng thái:** ✅ Sẵn sàng sử dụng **Dataset:** Health
+Personal (5.000 bản ghi, 28 features) **Mô hình:** HealthMLP **Bypass Modes:** 6
+(0, 1, 2, 4, 8, 15)

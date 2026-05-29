@@ -124,7 +124,7 @@ class SimulationEngine:
 
         # Nếu là BASELINE, cần thiết lập Topology tĩnh ngay từ đầu (VD: Random Graph)
         if self.system_mode == 'BASELINE':
-            self._setup_static_topology(num_workers, connectivity=0.1)
+            self._setup_static_topology(num_workers, connectivity=0.5)
         else:
             # Chạy bầu cử lần đầu
             # Khởi tạo blockchain            
@@ -216,11 +216,12 @@ class SimulationEngine:
         
         if self.system_mode == 'BASELINE':
             execution_result = self._run_round_baseline(round_id)
+            current_round_cluster_models = self.current_cluster_models if self.current_cluster_models is not None else None
         else:
             execution_result = self._run_round_proposed(round_id)
             current_round_cluster_models = execution_result['current_round_k_models']
 
-        security_metrics = self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models) if self.system_mode != 'BASELINE' else self._calculate_advanced_metrics(attack_config, current_round_cluster_models=None)
+        security_metrics = self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models) if self.system_mode != 'BASELINE' else self._calculate_advanced_metrics(attack_config, current_round_cluster_models=current_round_cluster_models)
         # print("Exe result", execution_result.keys(), flush=True)
         # Cập nhật previous global acc cho vòng kế tiếp
         self.previous_global_acc = security_metrics['avg_acc']
@@ -327,36 +328,165 @@ class SimulationEngine:
 
     def _phase_baseline_clustering(self):
         """
-        Baseline DFCA clustering: assign workers to 3 clusters by evaluating
-        loss against cluster centroid models.
+        IMPROVED BASELINE DFCA CLUSTERING
+        
+        Thực hiện phân cụm với K-model được khởi tạo đúng cách:
+        1. Khởi tạo K-models từ aggregated updates (không phải random)
+        2. Workers tham gia cụm dựa trên loss evaluation
+        3. Cập nhật cluster models sau khi assignment
+        4. Đảm bảo balanced clustering
+        5. Lưu cluster statistics cho metrics
         """
-        num_clusters = 3
+        num_clusters = getattr(Config, 'NUM_CLUSTERS', 3)
         if not self.workers:
             return
 
-        print(f"[Baseline DFCA] Clustering into {num_clusters} clusters by loss")
+        print(f"[Baseline DFCA] Phase 1: Initializing K-models with {num_clusters} clusters...")
 
-        cluster_models = {}
-        for cid in range(num_clusters):
-            if cid < len(self.workers):
-                cluster_models[cid] = {
-                    k: v.clone() for k, v in self.workers[cid].model.state_dict().items()
-                }
-            else:
-                cluster_models[cid] = {
-                    k: v.clone() for k, v in cluster_models[0].items()
-                }
+        # ========== BƯỚC 1: KHỞI TẠO K-MODELS TỪNG NHÓM CÓ NGHĨA ==========
+        # Thay vì dùng model random của worker đầu tiên, ta sẽ:
+        # - Chia workers thành K nhóm
+        # - Lấy aggregated model từ mỗi nhóm làm centroid ban đầu
+        
+        if not hasattr(self, 'current_cluster_models') or not self.current_cluster_models:
+            print("   -> (Round 1) Khởi tạo ngẫu nhiên K-models ban đầu...")
+            cluster_models = self._initialize_baseline_k_models(num_clusters)
+        else:
+            print("   -> (Round > 1) Kế thừa K-models từ vòng trước...")
+            # Sử dụng lại trọng số đã được aggregate từ vòng trước
+            cluster_models = self.current_cluster_models
+        
+        print(f"   -> K-models initialized from aggregated worker groups")
 
+        # ========== BƯỚC 2: WORKERS CHỌN CỤM DỰA VÀO LOSS ==========
+        # Reset cluster state
+        clusters = {cid: [] for cid in range(num_clusters)}
+        
         for w in self.workers:
-            w.join_cluster(cluster_models)
+            # Tính loss trên mỗi cluster model
+            losses = {}
+            for cid, model_state in cluster_models.items():
+                loss = w.evaluate_loss_on_model(model_state)
+                losses[cid] = loss
+            
+            # Chọn cụm có loss thấp nhất
+            best_cid = min(losses, key=losses.get)
+            w.cluster_id = best_cid
+            w.current_loss = losses[best_cid]
+            clusters[best_cid].append(w)
+            
+            print(f"   Worker {w.id} -> Cluster {best_cid} (loss={losses[best_cid]:.4f})")
+
+        # ========== 3. NẠP MÔ HÌNH VÀ HUẤN LUYỆN==========
+        print(f"\n[Baseline DFCA] Phase 2: Local Training on Clusters...")
+        for w in self.workers:
+            # A. Ép Worker NẠP đúng trọng số của Cụm mà nó vừa chọn
             w.model.load_state_dict(cluster_models[w.cluster_id])
-            w.model = w.model.to(w.device)
-
-        cluster_counts = {cid: 0 for cid in cluster_models}
+            w.model.to(w.device)
+            
+            # B. CHO WORKER HUẤN LUYỆN ĐỂ TẠO RA TRI THỨC MỚI!
+            print(f"   Worker {w.id} (Cluster {w.cluster_id}) đang huấn luyện...")
+            w.train() # None vì trọng số đã được nạp ở dòng trên
+            w.model.to('cpu')
+            
+        # ========== BƯỚC 3: CẬP NHẬT CLUSTER MODELS TỪ MEMBERS ==========
+        # Sau khi assignment, tính lại cluster models từ các thành viên
+        updated_cluster_models = self._update_cluster_models(clusters, num_clusters, cluster_models)
+        
+        # Load lại model cho workers từ centroid mới
         for w in self.workers:
-            cluster_counts[w.cluster_id] += 1
+            if w.cluster_id in updated_cluster_models:
+                w.model.load_state_dict(updated_cluster_models[w.cluster_id])
+                w.model = w.model.to(w.device)
 
-        print(f"   -> Baseline cluster assignment: {cluster_counts}")
+        # ========== BƯỚC 4: THỐNG KÊ VÀ LOG ==========
+        cluster_counts = {cid: len(members) for cid, members in clusters.items()}
+        self.current_clusters = clusters  # Lưu clustering hiện tại
+        self.current_cluster_models = updated_cluster_models  # Lưu models cho metrics
+        
+        print(f"\n[Baseline DFCA] Cluster Assignment Summary:")
+        print(f"   Cluster distribution: {cluster_counts}")
+        
+        # Kiểm tra balanced clustering
+        cluster_sizes = list(cluster_counts.values())
+        balance_ratio = min(cluster_sizes) / max(cluster_sizes) if cluster_sizes and max(cluster_sizes) > 0 else 0
+        print(f"   Balance ratio (min/max): {balance_ratio:.2f}")
+        
+        # In chi tiết thành viên của mỗi cụm
+        for cid in range(num_clusters):
+            members_ids = [w.id for w in clusters[cid]]
+            print(f"   Cluster {cid}: Workers {members_ids} (n={len(members_ids)})")
+
+    def _initialize_baseline_k_models(self, num_clusters):
+        """
+        ✅ CHUẨN HÓA KHỞI TẠO K-MODEL CHO IFCA/DFCA
+        
+        Khởi tạo K mô hình với các trọng số ngẫu nhiên KHÁC NHAU.
+        Điều này là BẮT BUỘC để tránh hiện tượng Sụp đổ Cụm (Cluster Collapse) 
+        ngay ở vòng 1. Sự khác biệt ngẫu nhiên sẽ ép các worker phải 
+        phân tán ra nhiều cụm khác nhau khi tính Loss.
+        
+        Args:
+            num_clusters: Số lượng cụm K
+            
+        Returns:
+            dict: {cluster_id: model_state_dict}
+        """
+        print(f"\n[Engine] Khởi tạo {num_clusters} K-Models với trọng số ngẫu nhiên đa dạng cho DFCA...")
+        
+        if num_clusters <= 0:
+            return {}
+        
+        cluster_models = {}
+        from app.models.cnn import get_model
+        
+        for cid in range(num_clusters):
+            # Khởi tạo một Model hoàn toàn mới (PyTorch sẽ cấp phát trọng số ngẫu nhiên mới)
+            # Không cố định seed ở đây để đảm bảo sự đa dạng
+            print("WTFFFF",self.engine_config.get('num_classes', 10), flush=True)
+            temp_model = get_model(
+                self.engine_config.get('model'),
+                num_classes=self.engine_config.get('num_classes', 10)
+            )
+            
+            # Lưu trữ State Dict
+            cluster_models[cid] = {k: v.cpu().clone() for k, v in temp_model.state_dict().items()}
+            
+            # Xóa mô hình tạm để giải phóng bộ nhớ
+            del temp_model
+            
+            print(f"   -> Đã tạo K-Model ngẫu nhiên cho Cụm {cid}")
+            
+        return cluster_models
+
+    def _update_cluster_models(self, clusters, num_clusters, current_cluster_models):
+        """
+        ...
+        Args:
+            clusters: dict {cluster_id: [workers]}
+            num_clusters: Số cụm
+            current_cluster_models: Mô hình K-model CỦA VÒNG TRƯỚC {cluster_id: state_dict}
+        """
+        updated_models = {}
+        from app.core.baseline_aggregation import AggregationAlgorithms
+        
+        for cid in range(num_clusters):
+            members = clusters.get(cid, [])
+            
+            if not members:
+                print(f"   Warning: Cluster {cid} is empty! Keeping its previous model.")
+                # Lấy lại mô hình của vòng trước thay vì lấy rác từ worker[0]
+                updated_models[cid] = {k: v.clone() for k, v in current_cluster_models[cid].items()}
+                continue
+            
+            # Aggregated models của tất cả thành viên trong cụm
+            member_models = [w.model.state_dict() for w in members]
+            aggregated = AggregationAlgorithms.dfca(member_models)
+            updated_models[cid] = aggregated
+            
+            print(f"   Cluster {cid} model updated (members: {[w.id for w in members]})")
+        
+        return updated_models
 
     def _run_round_proposed(self, round_id):
         """
@@ -745,160 +875,7 @@ class SimulationEngine:
             results.append({"cluster_id": ch.cluster_id, **aggregate_res, "cluster_head_id": ch.id, "cluster_members": [m.id for m in members]})
             
         return results, accuracies, total_traffic
-
-    # def _phase_aggregation(self, clusters, instruction_maps, worker_updates_cache, round_id):
-    #     print("[Phase 4] Aggregation & Secret Sharing...")
-    #     round_results = []
-    #     real_accuracies = {} # {cluster_id: accuracy}
-        
-    #     for cid, members in clusters.items():
-    #         if cid not in instruction_maps:
-    #             continue
-                
-    #         # 1. Xác định Head
-    #         head_node = next((m for m in members if m.is_head), None)
-    #         if not head_node: continue
-            
-    #         # 2. Head thu thập models từ các member (Mô phỏng truyền tin)
-    #         # instruction_maps[cid] có dạng {head_id: [member_id_1, member_id_2...]}
-    #         senders_list = instruction_maps[cid].get(head_node.id, [])
-            
-    #         # Reset hàng đợi của Head trước khi nhận
-    #         head_node.pending_models = []
-            
-    #         # Nạp update từ cache vào Head
-    #         for sender_id in senders_list:
-    #             if sender_id in worker_updates_cache:
-    #                 w_update = worker_updates_cache[sender_id]
-    #                 head_node.receive_update(noisy_params=w_update,worker_id=sender_id) # Hàm này append vào pending_models
-            
-    #         # Head cũng tự train
-    #         if head_node.id in worker_updates_cache:
-    #             head_node.receive_update(noisy_params=worker_updates_cache[head_node.id],worker_id=head_node.id)
-
-    #         # 3. Thực hiện Aggregate (Đã bao gồm Filtering + Secret Sharing)
-    #         # Hàm này trả về Dict chứa {metadata, encrypted_shares, model_hash, ...}
-
-    #         head_node.set_committee_info(committee_config={
-    #             't': self.t_threshold,
-    #             'n': len(self.current_committee),
-    #             "public_keys": {com.id: com.get_public_key() 
-    #                             for com in self.current_committee}
-    #         })
-    #         agg_result = head_node.aggregate(round_k=round_id)
-            
-    #         # Gán thêm cluster_id để Blockchain biết của ai
-    #         agg_result['cluster_id'] = cid
-    #         agg_result['cluster_members'] = [m.id for m in members]
-            
-    #         round_results.append(agg_result)
-            
-    #     return round_results, real_accuracies
-
-    # def _phase_consensus(self, results):
-    #     print("[Phase 5] Blockchain Consensus...")
-    #     logs = []
-    #     proposer = self.current_proposer
-    #     committee = self.current_committee
-    #     threshold = self.t_threshold
-    #     consensus_threshold = self.consensus_threshold
-        
-    #     sorted_committee_ids = sorted([v.id for v in committee])
-    #     id_to_index = {uid: i for i, uid in enumerate(sorted_committee_ids, start=1)}
-    #     print(f"[Debug] Index Mapping for Reconstruction: {id_to_index}")
-    #     for res in results:
-    #         cluster_id = res['cluster_id']
-    #         encrypted_shares_map = res.get('encrypted_shares')
-    #         cluster_members = res.get('cluster_members', [])            
-
-    #         if not encrypted_shares_map:
-    #             continue            
-
-    #         # --- BƯỚC 1: Validator (Committee) giải mã ---
-    #         decrypted_shares = {}
-            
-    #         for validator in committee:
-    #             # Kiểm tra xem có gói tin cho validator này không
-    #             if validator.id in encrypted_shares_map:
-    #                 enc_pkg = encrypted_shares_map[validator.id]
-                    
-    #                 # Validator tự dùng key của mình để giải mã
-    #                 share = validator.decrypt_share(enc_pkg)
-                    
-    #                 if share is not None:
-    #                     # decrypted_shares[validator.id] = share
-    #                     correct_x = id_to_index.get(validator.id)
-                        
-    #                     if correct_x:
-    #                         decrypted_shares[correct_x] = share
-    #                     else:
-    #                         print(f"Error: Validator {validator.id} not in sorted mapping!")
-            
-    #         # --- BƯỚC 2: Proposer tái tạo Model ---
-    #         metadata = res['metadata']
-    #         reconstructed_model = proposer.reconstruct_model(collected_shares=decrypted_shares, metadata=metadata,threshold=threshold)
-
-    #         # with open("rec_model.txt", "w", encoding="utf-8") as f:
-    #         #     f.write(str(reconstructed_model))
-                
-    #         if reconstructed_model is None:
-    #             logs.append(f"Cluster {cluster_id}: Consensus Failed (Reconstruction Error)")
-    #             continue
-
-    #         # --- Verify (Soft Check Norm/Hash) ---
-    #         proposed_norm = res.get('model_norm')
-    #         rec_norm = compute_model_norm(reconstructed_model)
-            
-    #         if abs(proposed_norm - rec_norm) > 1e-3:
-    #             logs.append(f"The difference between two models are too much")
-    #             continue
-    #         else:
-    #             logs.append(f"Two models are the same!")
-
-    #         # Bước 3: COmmittee Validation
-    #         votes, scores = self._run_committee_validation(committee=committee, model_state=reconstructed_model,val_loader=self.test_loader)
-
-    #         total_votes = len(votes)
-    #         approved_votes = sum(votes.values())
-    #         is_approved = (approved_votes / total_votes) >= consensus_threshold
-
-    #         # Tính điểm Acc trung bình của cả hội đồng
-    #         final_acc = sum(scores.values()) / total_votes if total_votes > 0 else 0
-    #         print(f" -> Consensus Result: {approved_votes}/{total_votes} votes. Approved? {is_approved}")
-
-    #         # Bước 4: Gọi Smart Contract
-    #         self.blockchain.execute_smart_contract(
-    #             proposer_id=proposer.id,
-    #             cluster_members=cluster_members,
-    #             votes=votes,
-    #             accuracy=final_acc,
-    #             is_good_update=is_approved
-    #         )
-
-    #         if not is_approved:
-    #             logs.append(f"Cluster {cluster_id}: Rejected (Vote Failed {approved_votes}/{total_votes})")
-    #             continue
-
-    #         # Bước 5: Tạo BLOCK mới
-    #         storage_path = self.blockchain._save_model_offchain(reconstructed_model, cluster_id, res['model_hash'])
-
-    #         last_block = self.blockchain.chain[-1]
-    #         block_data = {
-    #             "accuracy": final_acc,          # Dùng accuracy do ủy ban chấm
-    #             "model_hash": res['model_hash'],
-    #             "storage_uri": storage_path,
-    #             "votes": votes,
-    #             "previous_block": last_block
-    #         }
-            
-    #         new_block = self.blockchain.add_block(
-    #             block_data
-    #         )
-    #         success = self.blockchain.is_valid_new_block(new_block, last_block)
-    #         status = "Accepted" if success else "Rejected (Blockchain Add Error)"
-    #         logs.append(f"Cluster {cluster_id}: {status}")
-
-    #     return logs
+    
     def _phase_consensus(self, results):
         """
         Giai đoạn 5: Đồng thuận Blockchain (Consensus)
@@ -1312,21 +1289,6 @@ class SimulationEngine:
 
         total_mal_updates = 0 # Tổng số lần kẻ xấu gửi updates
         total_benign_updates = 0 # Tổng số ng tốt gửi update
-
-        # for ch in self.cluster_heads:
-        #     if not hasattr(ch, 'blocked_ids_this_round'): continue
-
-        #     blocked_set = ch.blocked_ids_this_round
-        #     member_ids = set(ch.members)
-
-        #     local_malicious = member_ids.intersection(actual_malicious)
-        #     local_benign = member_ids.intersection(actual_benign)
-
-        #     total_benign_updates += len(local_benign)
-        #     total_mal_updates += len(local_malicious)
-
-        #     total_blocked_benign += len(blocked_set.intersection(actual_benign))
-        #     total_blocked_mal += len(blocked_set.intersection(actual_malicious))
         # ==========================================
         # TRƯỜNG HỢP 1: KỊCH BẢN PROPOSED (Có Cluster Heads)
         # ==========================================

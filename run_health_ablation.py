@@ -16,8 +16,7 @@ from app.core.bypass_ablation import BypassConfig
 def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_type="NONE", 
                                gia_iterations=2000, gia_lr=1.0, attack_rate=0.1):
     """
-    Versão simplificada que evita problemas de avaliação de modelo.
-    Suporta attack types incluindo GIA (Gradient Inversion Attack).
+    hàm chạy run round trong engine, nhận tham số đầu vào và chuyển cho cấu hình bên dưới
     """
     scenario_name = BypassConfig.get_name(bypass_mode)
     
@@ -36,7 +35,7 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_ty
         print(f"  Attack Rate: {attack_rate}")
     print("="*80 + "\n")
     
-    # Cấu hình simplificada
+    # Cấu hình
     config = {
         "bypass_mode": bypass_mode,
         "num_workers": num_workers,
@@ -64,7 +63,7 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_ty
         print(f"[ERROR] Failed to initialize engine: {e}")
         return None
     
-    # Coletar metrics simples
+    # Tính toán chỉ số
     history = defaultdict(list)
     
     for round_id in range(total_rounds):
@@ -109,8 +108,7 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_ty
             # Lấy GIA metrics nếu có (MSE/PSNR từ Gradient Inversion Attack)
             recon_mse = result.get('recon_mse', None)
             recon_psnr = result.get('recon_psnr', None)
-            
-            # Convert lista -> scalar nếu cần
+                        
             if isinstance(avg_acc, (list, tuple)):
                 avg_acc = avg_acc[0] if avg_acc else 0.0
             if isinstance(avg_loss, (list, tuple)):
@@ -160,11 +158,9 @@ def run_health_ablation_simple(bypass_mode, total_rounds, num_workers, attack_ty
             
         except Exception as e:
             print(f"  [ERROR] Round {round_id} critical failure: {str(e)}")
-            print(f"          Error type: {type(e).__name__}\n")
-            # Não continua - crit failure
+            print(f"          Error type: {type(e).__name__}\n")            
             import traceback
-            traceback.print_exc()
-            # Mas vamos tentar salvar o que temos
+            traceback.print_exc()            
             break
     
     # Salvar results
@@ -284,7 +280,7 @@ Examples:
         print("Available modes: 0, 1, 2, 4, 8, 15")
         return
     
-    # Validate prerequisites
+    # Kiểm tra file đầu vào
     if not os.path.exists("data/personal_health_data.csv"):
         print("[ERROR] Health dataset not found!")
         print("Run this first to generate the dataset:")
